@@ -1,0 +1,21 @@
+# Use Python 3.9 slim image
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY cardiovascular_requirements.txt .
+
+# Install dependencies
+RUN pip install --no-cache-dir -r cardiovascular_requirements.txt
+
+# Copy the API code and model
+COPY cardiovascular_api.py .
+COPY xgboost_model.pkl .
+
+# Expose port 5002
+EXPOSE 5002
+
+# Run the API
+CMD ["python", "cardiovascular_api.py"]
