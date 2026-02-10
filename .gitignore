@@ -52,13 +52,11 @@ logs/
 *.db
 *.sqlite3
 
-# Synthea output (large generated files)
-synthea_output/fhir/
-synthea_output/metadata/
-synthea_output/x12/
+# Synthea JAR (large file)
+#synthea-with-dependencies.jar
 
-# Keep the CSV folder structure but ignore large files
-# synthea_output/csv/  # Uncomment to ignore all CSVs
+# Synthea output - ignore all generated data
+synthea_output/
 
 # OS files
 .DS_Store
