@@ -104,7 +104,7 @@ CARDIOVASCULAR_REQUIREMENTS = ModelRequirements(
     ],
     feature_types={
         "age": float,       # Age in years or days
-        "gender": int,      # 1 = Female, 2 = Male
+        "gender": str,      # "Female" or "Male"
         "height": float,    # Height in cm
         "weight": float,    # Weight in kg
         "ap_hi": int,       # Systolic BP
@@ -116,7 +116,7 @@ CARDIOVASCULAR_REQUIREMENTS = ModelRequirements(
         "active": int       # 0 or 1
     },
     categorical_values={
-        "gender": [1, 2],
+        "gender": ["Female", "Male"],
         "cholesterol": [1, 2, 3],
         "gluc": [1, 2, 3],
         "smoke": [0, 1],
@@ -306,10 +306,13 @@ class MainSwarmRouter:
         # Process age (convert days to years if needed)
         age_years = data["age"] / 365.25 if data["age"] > 150 else data["age"]
         
+        # Convert gender string to int (1=Female, 2=Male) for model
+        gender_int = 1 if data["gender"] == "Female" else 2
+        
         # Prepare feature array in correct order
         features = np.array([[
             age_years,
-            data["gender"],
+            gender_int,
             data["height"],
             data["weight"],
             data["ap_hi"],
@@ -347,7 +350,7 @@ class MainSwarmRouter:
             "input_data": {
                 "age_years": round(age_years, 1),
                 "bmi": round(data["weight"] / ((data["height"] / 100) ** 2), 2),
-                "gender": "Female" if data["gender"] == 1 else "Male",
+                "gender": data["gender"],
                 "systolic_bp": data["ap_hi"],
                 "diastolic_bp": data["ap_lo"],
                 "cholesterol_level": data["cholesterol"],
@@ -451,61 +454,104 @@ class MainSwarmRouter:
     
     def route(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Route incoming data to the appropriate model using If-Elif-Else priority logic.
+        Route incoming data to ALL models whose requirements are met.
         
-        Priority Order:
-            1. Cardiovascular Model (if 100% requirements met)
-            2. Diabetes Model (if 100% requirements met)
-            3. Error if no model matches
+        Runs all eligible models and returns combined results.
         
         Args:
             data: Input patient data dictionary
             
         Returns:
-            Prediction result with model selection and SHAP explanation,
+            Prediction results from all eligible models with SHAP explanations,
             or error message if no model requirements are met.
         """
         logger.info(f"Routing request with keys: {list(data.keys())}")
         
-        # Priority 1: Check Cardiovascular Model Requirements
+        results = {}
+        models_run = []
+        
+        # Check and run Cardiovascular Model
         cardio_valid, cardio_issues = CARDIOVASCULAR_REQUIREMENTS.validate(data)
         if cardio_valid:
-            if ModelType.CARDIOVASCULAR not in self.models:
-                return {
-                    "error": "Cardiovascular model not loaded",
-                    "selected_model": None
-                }
-            logger.info("Routing to Cardiovascular model - all requirements met")
-            return self._predict_cardiovascular(data)
+            if ModelType.CARDIOVASCULAR in self.models:
+                logger.info("Running Cardiovascular model - all requirements met")
+                results["cardiovascular"] = self._predict_cardiovascular(data)
+                models_run.append("cardiovascular")
+            else:
+                results["cardiovascular"] = {"error": "Model not loaded"}
         
-        # Priority 2: Check Diabetes Model Requirements
+        # Check and run Diabetes Model
         diabetes_valid, diabetes_issues = DIABETES_REQUIREMENTS.validate(data)
         if diabetes_valid:
-            if ModelType.DIABETES not in self.models:
-                return {
-                    "error": "Diabetes model not loaded",
-                    "selected_model": None
-                }
-            logger.info("Routing to Diabetes model - all requirements met")
-            return self._predict_diabetes(data)
+            if ModelType.DIABETES in self.models:
+                logger.info("Running Diabetes model - all requirements met")
+                results["diabetes"] = self._predict_diabetes(data)
+                models_run.append("diabetes")
+            else:
+                results["diabetes"] = {"error": "Model not loaded"}
         
-        # Priority 3: No model requirements met - return detailed error
-        logger.warning("No model requirements fully met")
-        return {
-            "error": "Requirements not met for any model.",
-            "selected_model": None,
-            "validation_details": {
-                "cardiovascular": {
-                    "valid": False,
-                    "missing_or_invalid": cardio_issues
+        # If no models ran, return error with details
+        if not models_run:
+            logger.warning("No model requirements fully met")
+            return {
+                "error": "Requirements not met for any model.",
+                "models_run": [],
+                "validation_details": {
+                    "cardiovascular": {
+                        "valid": False,
+                        "missing_or_invalid": cardio_issues
+                    },
+                    "diabetes": {
+                        "valid": False,
+                        "missing_or_invalid": diabetes_issues
+                    }
                 },
-                "diabetes": {
-                    "valid": False,
-                    "missing_or_invalid": diabetes_issues
-                }
-            },
-            "hint": "Ensure all required features are provided with correct types and values."
+                "hint": "Ensure all required features are provided with correct types and values."
+            }
+        
+        # Return results from all models that ran
+        return {
+            "models_run": models_run,
+            "results": results,
+            "summary": self._generate_combined_summary(results, models_run)
         }
+    
+    def _generate_combined_summary(self, results: Dict[str, Any], models_run: List[str]) -> Dict[str, Any]:
+        """Generate a combined summary when multiple models run."""
+        summary = {
+            "total_models_run": len(models_run),
+            "risk_overview": {}
+        }
+        
+        for model_name in models_run:
+            if model_name in results and "error" not in results[model_name]:
+                result = results[model_name]
+                summary["risk_overview"][model_name] = {
+                    "risk_category": result.get("risk_category"),
+                    "risk_probability": result.get("risk_probability"),
+                    "prediction": result.get("prediction")
+                }
+        
+        # Determine overall risk assessment
+        risk_levels = {"High": 3, "Medium": 2, "Low": 1}
+        max_risk = "Low"
+        for model_name, overview in summary["risk_overview"].items():
+            if overview["risk_category"] and risk_levels.get(overview["risk_category"], 0) > risk_levels.get(max_risk, 0):
+                max_risk = overview["risk_category"]
+        
+        summary["highest_risk_level"] = max_risk
+        summary["recommendation"] = self._get_recommendation(max_risk, models_run)
+        
+        return summary
+    
+    def _get_recommendation(self, risk_level: str, models_run: List[str]) -> str:
+        """Generate recommendation based on overall risk level."""
+        if risk_level == "High":
+            return "Immediate medical consultation recommended. Multiple risk factors detected."
+        elif risk_level == "Medium":
+            return "Schedule follow-up with healthcare provider. Monitor risk factors closely."
+        else:
+            return "Continue healthy lifestyle. Regular check-ups recommended."
     
     def get_model_requirements(self, model_name: Optional[str] = None) -> Dict[str, Any]:
         """
