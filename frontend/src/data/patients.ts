@@ -1,0 +1,231 @@
+import type { Patient, Doctor, Notification, ChatMessage } from '@/types/patient'
+
+export const mockDoctor: Doctor = {
+  id: 'doc-001',
+  name: 'Dr. Sarah Chen',
+  specialty: 'Internal Medicine',
+  medicalLicenseId: 'ML-2024-8821',
+}
+
+export const mockPatients: Patient[] = [
+  {
+    id: 'pat-001',
+    name: 'John Anderson',
+    age: 45,
+    sex: 'M',
+    bloodType: 'A+',
+    primaryCondition: 'Stable Angina',
+    symptom: 'Mild chest discomfort, occasional fatigue',
+    vitals: {
+      heartRate: 72,
+      bloodPressure: '120/80',
+      oxygenSaturation: 98,
+    },
+    labResults: {
+      glucose: 95,
+      cholesterol: 185,
+      creatinine: 1.1,
+    },
+    riskLevel: 'low',
+    riskPercentage: 15,
+    riskHistory: [
+      { date: '2026-01-15', score: 18 },
+      { date: '2026-01-22', score: 16 },
+      { date: '2026-01-29', score: 14 },
+      { date: '2026-02-05', score: 15 },
+    ],
+    medications: ['Aspirin 81mg', 'Atorvastatin 20mg'],
+    allergies: ['Penicillin'],
+    clinicalSummary: 'Patient presents with stable angina pectoris, well-controlled on current medication regimen. No acute distress noted. Cardiovascular risk factors include mild hyperlipidemia, now improving with statin therapy. Stress test from January showed good exercise tolerance. Continue current management with quarterly follow-ups.',
+    lastVisit: '2026-02-08',
+  },
+  {
+    id: 'pat-002',
+    name: 'Maria Garcia',
+    age: 62,
+    sex: 'F',
+    bloodType: 'O-',
+    primaryCondition: 'Hypertension Stage 2',
+    symptom: 'Elevated blood pressure, dizziness',
+    vitals: {
+      heartRate: 88,
+      bloodPressure: '145/92',
+      oxygenSaturation: 96,
+    },
+    labResults: {
+      glucose: 118,
+      cholesterol: 220,
+      creatinine: 1.3,
+    },
+    riskLevel: 'watch',
+    riskPercentage: 55,
+    riskHistory: [
+      { date: '2026-01-15', score: 48 },
+      { date: '2026-01-22', score: 52 },
+      { date: '2026-01-29', score: 58 },
+      { date: '2026-02-05', score: 55 },
+    ],
+    medications: ['Lisinopril 20mg', 'Amlodipine 5mg', 'Metformin 500mg'],
+    allergies: ['Sulfa drugs', 'Shellfish'],
+    clinicalSummary: 'Long-standing hypertension with recent suboptimal control despite dual therapy. Experiencing episodic dizziness, likely orthostatic. Borderline diabetic with HbA1c of 6.2%. Renal function mildly reduced but stable. Recommend lifestyle modifications including sodium restriction and weight management. Consider adding third antihypertensive if BP remains elevated.',
+    lastVisit: '2026-02-09',
+  },
+  {
+    id: 'pat-003',
+    name: 'Robert Kim',
+    age: 71,
+    sex: 'M',
+    bloodType: 'B+',
+    primaryCondition: 'Atrial Fibrillation',
+    symptom: 'Arrhythmia detected, shortness of breath',
+    vitals: {
+      heartRate: 98,
+      bloodPressure: '165/105',
+      oxygenSaturation: 92,
+    },
+    labResults: {
+      glucose: 142,
+      cholesterol: 245,
+      creatinine: 1.8,
+    },
+    riskLevel: 'critical',
+    riskPercentage: 85,
+    riskHistory: [
+      { date: '2026-01-15', score: 72 },
+      { date: '2026-01-22', score: 78 },
+      { date: '2026-01-29', score: 82 },
+      { date: '2026-02-05', score: 85 },
+    ],
+    medications: ['Warfarin 5mg', 'Metoprolol 50mg', 'Digoxin 0.125mg', 'Furosemide 40mg'],
+    allergies: ['Aspirin', 'ACE Inhibitors'],
+    clinicalSummary: 'Persistent atrial fibrillation with rapid ventricular response despite rate control therapy. New-onset dyspnea on exertion concerning for decompensated heart failure. Recent echocardiogram shows reduced EF of 35%. INR therapeutic at 2.4. Urgent cardiology referral placed for possible cardioversion and advanced heart failure management. High stroke risk - CHA2DS2-VASc score of 5.',
+    lastVisit: '2026-02-10',
+  },
+  {
+    id: 'pat-004',
+    name: 'Emily Thompson',
+    age: 34,
+    sex: 'F',
+    bloodType: 'AB+',
+    primaryCondition: 'Post-Op Recovery',
+    symptom: 'Post-operative recovery, stable',
+    vitals: {
+      heartRate: 68,
+      bloodPressure: '118/76',
+      oxygenSaturation: 99,
+    },
+    labResults: {
+      glucose: 88,
+      cholesterol: 165,
+      creatinine: 0.9,
+    },
+    riskLevel: 'low',
+    riskPercentage: 8,
+    riskHistory: [
+      { date: '2026-01-15', score: 25 },
+      { date: '2026-01-22', score: 18 },
+      { date: '2026-01-29', score: 12 },
+      { date: '2026-02-05', score: 8 },
+    ],
+    medications: ['Ibuprofen 400mg PRN', 'Multivitamin'],
+    allergies: [],
+    clinicalSummary: 'Status post laparoscopic cholecystectomy 3 weeks ago. Excellent recovery with minimal post-operative pain. Surgical site healing well, no signs of infection. All labs normalized. Patient cleared for return to normal activities. Schedule routine follow-up in 3 months.',
+    lastVisit: '2026-02-07',
+  },
+  {
+    id: 'pat-005',
+    name: 'David Patel',
+    age: 58,
+    sex: 'M',
+    bloodType: 'A-',
+    primaryCondition: 'Type 2 Diabetes',
+    symptom: 'Irregular glucose levels, monitoring',
+    vitals: {
+      heartRate: 82,
+      bloodPressure: '138/88',
+      oxygenSaturation: 97,
+    },
+    labResults: {
+      glucose: 165,
+      cholesterol: 198,
+      creatinine: 1.2,
+    },
+    riskLevel: 'watch',
+    riskPercentage: 42,
+    riskHistory: [
+      { date: '2026-01-15', score: 38 },
+      { date: '2026-01-22', score: 40 },
+      { date: '2026-01-29', score: 44 },
+      { date: '2026-02-05', score: 42 },
+    ],
+    medications: ['Metformin 1000mg', 'Glipizide 5mg', 'Lisinopril 10mg'],
+    allergies: ['Latex'],
+    clinicalSummary: 'Type 2 diabetes mellitus with suboptimal glycemic control. HbA1c at 7.8%, target <7%. Fasting glucose levels variable, ranging 140-180 mg/dL. Patient reports occasional dietary non-compliance. Mild hypertension well-controlled. Annual diabetic eye exam scheduled. Reinforced importance of carbohydrate counting and regular glucose monitoring.',
+    lastVisit: '2026-02-10',
+  },
+  {
+    id: 'pat-006',
+    name: 'Linda Chen',
+    age: 29,
+    sex: 'F',
+    bloodType: 'O+',
+    primaryCondition: 'Healthy',
+    symptom: 'Routine checkup, no concerns',
+    vitals: {
+      heartRate: 70,
+      bloodPressure: '115/75',
+      oxygenSaturation: 99,
+    },
+    labResults: {
+      glucose: 82,
+      cholesterol: 155,
+      creatinine: 0.8,
+    },
+    riskLevel: 'low',
+    riskPercentage: 5,
+    riskHistory: [
+      { date: '2026-01-15', score: 5 },
+      { date: '2026-01-22', score: 5 },
+      { date: '2026-01-29', score: 5 },
+      { date: '2026-02-05', score: 5 },
+    ],
+    medications: [],
+    allergies: ['Peanuts'],
+    clinicalSummary: 'Healthy young adult presenting for annual wellness examination. No active medical problems. Vitals within normal limits. Labs unremarkable. Up to date on immunizations. Discussed preventive care including regular exercise, balanced diet, and stress management. Next annual visit in 12 months.',
+    lastVisit: '2026-02-10',
+  },
+]
+
+export const mockChatHistory: Record<string, ChatMessage[]> = {
+  'pat-001': [
+    { id: 'msg-1', role: 'user', content: 'What is the patient\'s cardiac history?', timestamp: new Date('2026-02-08T10:00:00') },
+    { id: 'msg-2', role: 'assistant', content: 'Patient John Anderson has a documented history of stable angina pectoris, first diagnosed in 2024. No prior myocardial infarction. Stress test (Jan 2026) showed good exercise tolerance with no significant ST changes. Current management includes aspirin and statin therapy with good symptom control.', timestamp: new Date('2026-02-08T10:00:05') },
+  ],
+  'pat-003': [
+    { id: 'msg-1', role: 'user', content: 'Check for cardiac history and stroke risk', timestamp: new Date('2026-02-10T09:00:00') },
+    { id: 'msg-2', role: 'assistant', content: 'Patient Robert Kim has persistent atrial fibrillation diagnosed 2023. CHA2DS2-VASc score: 5 (high stroke risk). On warfarin anticoagulation, INR therapeutic. Recent echo shows reduced EF 35%. History includes hypertensive heart disease, no prior stroke or TIA documented.', timestamp: new Date('2026-02-10T09:00:08') },
+    { id: 'msg-3', role: 'user', content: 'Any contraindications for cardioversion?', timestamp: new Date('2026-02-10T09:15:00') },
+    { id: 'msg-4', role: 'assistant', content: 'Review shows patient has been anticoagulated >3 weeks with therapeutic INR. No documented left atrial thrombus on prior imaging. However, recent heart failure symptoms may indicate need for TEE to rule out thrombus before cardioversion. Documented allergy to ACE inhibitors - avoid these in post-cardioversion management.', timestamp: new Date('2026-02-10T09:15:10') },
+  ],
+}
+
+export const mockNotifications: Notification[] = [
+  {
+    id: 'notif-001',
+    type: 'urgent',
+    message: 'Critical vitals detected for Robert Kim',
+    patientId: 'pat-003',
+    timestamp: new Date('2026-02-10T09:30:00'),
+  },
+  {
+    id: 'notif-002',
+    type: 'warning',
+    message: 'Blood pressure elevated for Maria Garcia',
+    patientId: 'pat-002',
+    timestamp: new Date('2026-02-10T08:15:00'),
+  },
+]
+
+export function getRandomVitalFluctuation(baseValue: number, variance: number): number {
+  return Math.round(baseValue + (Math.random() - 0.5) * variance * 2)
+}

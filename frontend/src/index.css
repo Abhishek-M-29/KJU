@@ -1,0 +1,170 @@
+@import "tailwindcss";
+
+/* 
+  Kju Medical Systems
+  Aesthetic: Refined Clinical Warmth
+  
+  A sophisticated medical dashboard that balances clinical precision
+  with warmth and humanity. Warm stone tones ground the interface,
+  while crisp typography ensures clarity.
+*/
+
+@theme {
+  /* Warm accent - a refined coral/terracotta */
+  --color-primary: #E07A5F;
+  --color-primary-dark: #C96A52;
+  --color-primary-light: #F4A896;
+  
+  /* Cool complement - soft teal for balance */
+  --color-accent: #3D8B8B;
+  --color-accent-light: #81B0AA;
+  
+  /* Stone neutrals - warm and grounding */
+  --color-stone-50: #FAFAF9;
+  --color-stone-100: #F5F5F4;
+  --color-stone-200: #E7E5E4;
+  --color-stone-300: #D6D3D1;
+  --color-stone-400: #A8A29E;
+  --color-stone-500: #78716C;
+  --color-stone-600: #57534E;
+  --color-stone-700: #44403C;
+  --color-stone-800: #292524;
+  --color-stone-900: #1C1917;
+  
+  /* Status colors - muted but clear */
+  --color-status-stable: #6EBB8D;
+  --color-status-watch: #E9B44C;
+  --color-status-critical: #E76F6F;
+  
+  /* Font stack - Instrument Sans for that refined tech feel */
+  --font-sans: 'Instrument Sans', 'SF Pro Display', system-ui, sans-serif;
+  --font-display: 'Fraunces', Georgia, serif;
+}
+
+/* Base styles */
+:root {
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  font-weight: 400;
+  color: var(--color-stone-800);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--color-stone-50);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Refined background - subtle warmth */
+.bg-gradient-mesh {
+  background: var(--color-stone-50);
+  background-image: 
+    radial-gradient(ellipse at 0% 0%, rgba(224, 122, 95, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 100% 100%, rgba(61, 139, 139, 0.03) 0%, transparent 50%);
+  min-height: 100vh;
+}
+
+/* Glass card - refined with better depth */
+.glass-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 16px;
+  box-shadow: 
+    0 1px 2px rgba(0, 0, 0, 0.03),
+    0 4px 16px rgba(0, 0, 0, 0.04);
+}
+
+.glass-input {
+  background: white;
+  border: 1px solid var(--color-stone-200);
+  border-radius: 10px;
+  transition: all 0.2s ease;
+}
+
+.glass-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(224, 122, 95, 0.1);
+}
+
+/* Display text styling */
+.display-text {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+/* Gradient text - warm version */
+.gradient-text {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Subtle animations */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out forwards;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+/* Scanning animation for login */
+@keyframes scan-line {
+  0%, 100% { transform: translateY(-100%); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  50% { transform: translateY(100%); }
+}
+
+.scan-animation {
+  animation: scan-line 2s ease-in-out infinite;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-stone-300);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-stone-400);
+}
+
+/* Selection color */
+::selection {
+  background: rgba(224, 122, 95, 0.2);
+  color: var(--color-stone-900);
+}

@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Command Dashboard Triage - Medical Swarm AI</title>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary": "#135bec",
+              "background-light": "#f6f6f8",
+              "background-dark": "#101622",
+              "glass-border": "rgba(255, 255, 255, 0.5)",
+              "glass-bg": "rgba(255, 255, 255, 0.65)",
+            },
+            fontFamily: {
+              "display": ["Manrope", "sans-serif"]
+            },
+            borderRadius: {
+              "DEFAULT": "0.25rem", 
+              "lg": "0.5rem", 
+              "xl": "0.75rem", 
+              "2xl": "1rem",
+              "3xl": "1.5rem",
+              "full": "9999px"
+            },
+            backdropBlur: {
+              'xs': '2px',
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        /* Custom Utilities for Glassmorphism */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.65);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.05);
+        }
+        
+        .dark .glass-panel {
+            background: rgba(16, 22, 34, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Circular Progress Bar CSS */
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.35s;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+
+        /* Abstract Background Pattern */
+        .bg-gradient-mesh {
+            background-color: #f6f6f8;
+            background-image: 
+                radial-gradient(at 0% 0%, hsla(220, 84%, 90%, 1) 0, transparent 50%), 
+                radial-gradient(at 100% 0%, hsla(220, 84%, 93%, 1) 0, transparent 50%), 
+                radial-gradient(at 100% 100%, hsla(220, 84%, 91%, 1) 0, transparent 50%), 
+                radial-gradient(at 0% 100%, hsla(220, 84%, 94%, 1) 0, transparent 50%);
+        }
+        
+        .dark .bg-gradient-mesh {
+            background-color: #101622;
+            background-image: 
+                radial-gradient(at 0% 0%, hsla(220, 84%, 8%, 1) 0, transparent 50%), 
+                radial-gradient(at 100% 0%, hsla(220, 84%, 10%, 1) 0, transparent 50%);
+        }
+    </style>
+</head>
+<body class="font-display bg-gradient-mesh text-slate-800 dark:text-slate-100 min-h-screen relative overflow-x-hidden transition-colors duration-300">
+<!-- Navbar -->
+<header class="sticky top-0 z-50 px-6 py-4">
+<div class="glass-panel rounded-2xl px-6 py-3 flex justify-between items-center">
+<!-- Left: Brand & Title -->
+<div class="flex items-center gap-4">
+<div class="bg-primary/10 p-2 rounded-lg">
+<span class="material-icons-round text-primary text-2xl">medical_services</span>
+</div>
+<div>
+<h1 class="text-lg font-bold text-slate-900 dark:text-white leading-tight">Command Center</h1>
+<p class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Patient Triage Dashboard</p>
+</div>
+</div>
+<!-- Middle: Search/Filter (Hidden on mobile, visible on desktop) -->
+<div class="hidden md:flex flex-1 max-w-md mx-8">
+<div class="relative w-full group">
+<span class="absolute left-3 top-1/2 -translate-y-1/2 material-icons-round text-slate-400 group-focus-within:text-primary transition-colors">search</span>
+<input class="w-full bg-white/50 dark:bg-slate-800/50 border-0 ring-1 ring-slate-200 dark:ring-slate-700 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary focus:bg-white dark:focus:bg-slate-800 transition-all placeholder-slate-400" placeholder="Search by patient ID, name, or condition..." type="text"/>
+</div>
+</div>
+<!-- Right: Doctor Profile & Alerts -->
+<div class="flex items-center gap-6">
+<!-- Status -->
+<div class="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-green-100 dark:bg-green-900/30 rounded-full border border-green-200 dark:border-green-800">
+<div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+<span class="text-xs font-semibold text-green-700 dark:text-green-400">Shift Active</span>
+</div>
+<!-- Notifications -->
+<button class="relative p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+<span class="material-icons-round text-slate-600 dark:text-slate-300">notifications</span>
+<span class="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-slate-900"></span>
+<span class="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 rounded-full animate-ping opacity-75"></span>
+</button>
+<!-- Profile -->
+<div class="flex items-center gap-3 pl-4 border-l border-slate-200 dark:border-slate-700">
+<div class="text-right hidden lg:block">
+<p class="text-sm font-bold text-slate-900 dark:text-white">Dr. Sarah Mitchell</p>
+<p class="text-xs text-primary font-medium">Cardiology Lead</p>
+</div>
+<img alt="Doctor profile portrait" class="w-10 h-10 rounded-full object-cover border-2 border-white dark:border-slate-700 shadow-sm" data-alt="Professional female doctor portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA2W93t8OV_HKa8W1dy80VvWiyRzISJHFVFIKJCjwXpv9eulblLTScwO6W7o6dQyOgvviX2b0aBaeJb7C1xKDbjm9SSD6stMnovTKu2G1aFRgitO1wYKCFta_FyY6bAlstacqZn9zBsoHt2mhLX3GqFL-gEe9SXup8FI0U7biKt34YfDkTYCt8v2JQYxR6rJyor-Sr0I7jB574VBx8K8UXmevB3xWfeDKP4UH3EXKci_E2fg2Jc8CDrx-r5yFAErQtjFgKZS8czwY5s"/>
+</div>
+</div>
+</div>
+</header>
+<!-- Main Content -->
+<main class="px-6 py-4 pb-24 max-w-[1600px] mx-auto">
+<!-- Dashboard Filters -->
+<div class="flex flex-wrap justify-between items-center mb-8 gap-4">
+<h2 class="text-2xl font-bold text-slate-800 dark:text-slate-100">Patient Monitor <span class="text-slate-400 font-light ml-2 text-lg">(12 Active)</span></h2>
+<div class="flex gap-3">
+<button class="flex items-center gap-2 px-4 py-2 bg-white/70 dark:bg-slate-800/70 backdrop-blur-sm rounded-lg text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-primary hover:bg-white shadow-sm transition-all border border-transparent hover:border-primary/20">
+<span class="material-icons-round text-base">filter_list</span>
+                    Filter Risk
+                </button>
+<button class="flex items-center gap-2 px-4 py-2 bg-white/70 dark:bg-slate-800/70 backdrop-blur-sm rounded-lg text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-primary hover:bg-white shadow-sm transition-all border border-transparent hover:border-primary/20">
+<span class="material-icons-round text-base">sort</span>
+                    Sort by Acuity
+                </button>
+</div>
+</div>
+<!-- Cards Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
+<!-- Card 1: High Risk -->
+<div class="glass-panel rounded-2xl p-6 relative group hover:-translate-y-1 transition-transform duration-300">
+<div class="absolute top-0 left-0 w-full h-1.5 bg-red-500 rounded-t-2xl"></div>
+<div class="flex justify-between items-start mb-6">
+<div class="flex gap-4">
+<div class="relative">
+<img alt="Patient avatar male" class="w-14 h-14 rounded-xl object-cover shadow-md" data-alt="Middle aged male patient portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDqFok7kpiBjmoOhAfML9Jyj3aFN_dtMo7dc0KnOea-Ta8kNzW1KK5BCBSnezJqPSVKp3qgM0oGYqa2QchjZfsQlJ8xVf7MI1plVmXDlK1CaSBiDnEaIneOZmw_RiuebnqW_TrCJ2155gDvLxrVYRBPv_d7JCyQ8SQa7V54mFY5bmXok6Eyy_bLJubzDQeMMl6zQQpgupyL8stf1z2fpYg5RC8txjm-6WxuZROBNswrJYuxLBJuaXkt3PQ-9Pdx5m_2r85bAnceM4OQ"/>
+<span class="absolute -bottom-1 -right-1 w-4 h-4 bg-red-500 border-2 border-white rounded-full"></span>
+</div>
+<div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white">James Doe</h3>
+<p class="text-sm text-slate-500">Male, 45y</p>
+<p class="text-xs font-mono text-slate-400 mt-0.5">ID: #8392-A</p>
+</div>
+</div>
+<!-- Risk Ring: Red -->
+<div class="relative w-14 h-14 flex items-center justify-center">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<circle class="text-slate-200 dark:text-slate-700 stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="8"></circle>
+<circle class="text-red-500 progress-ring__circle stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251.2" stroke-dashoffset="37.68" stroke-linecap="round" stroke-width="8"></circle> <!-- 85% -->
+</svg>
+<span class="absolute text-xs font-bold text-red-600 dark:text-red-400">85%</span>
+</div>
+</div>
+<!-- AI Tag -->
+<div class="mb-5 inline-flex items-center gap-1.5 px-3 py-1 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-xs font-bold rounded-full border border-red-100 dark:border-red-800/50">
+<span class="material-icons-round text-sm">smart_toy</span>
+<span>Swarm Alert: Arrhythmia Pattern</span>
+</div>
+<!-- Vitals Grid -->
+<div class="grid grid-cols-2 gap-3 mb-5">
+<div class="bg-white/40 dark:bg-slate-800/40 p-3 rounded-xl border border-white/50 dark:border-slate-700/50">
+<div class="flex items-center gap-1 mb-1">
+<span class="material-icons-round text-red-500 text-sm">favorite</span>
+<span class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">HR (BPM)</span>
+</div>
+<div class="flex items-end gap-2">
+<span class="text-2xl font-bold text-slate-800 dark:text-slate-100">110</span>
+<span class="text-xs font-bold text-red-500 mb-1">▲ 12%</span>
+</div>
+</div>
+<div class="bg-white/40 dark:bg-slate-800/40 p-3 rounded-xl border border-white/50 dark:border-slate-700/50">
+<div class="flex items-center gap-1 mb-1">
+<span class="material-icons-round text-primary text-sm">speed</span>
+<span class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">BP (mmHg)</span>
+</div>
+<div class="flex items-end gap-2">
+<span class="text-2xl font-bold text-slate-800 dark:text-slate-100">140/90</span>
+</div>
+</div>
+</div>
+<!-- Actions -->
+<div class="flex gap-2">
+<button class="flex-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 py-2 rounded-lg text-sm font-semibold shadow-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">Details</button>
+<button class="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm font-semibold shadow-md shadow-red-200 dark:shadow-none hover:bg-red-700 transition-colors">Intervene</button>
+</div>
+</div>
+<!-- Card 2: Medium Risk -->
+<div class="glass-panel rounded-2xl p-6 relative group hover:-translate-y-1 transition-transform duration-300">
+<div class="absolute top-0 left-0 w-full h-1.5 bg-yellow-400 rounded-t-2xl"></div>
+<div class="flex justify-between items-start mb-6">
+<div class="flex gap-4">
+<div class="relative">
+<img alt="Patient avatar female" class="w-14 h-14 rounded-xl object-cover shadow-md" data-alt="Senior female patient portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAnLdmvSoic7iJJ8JQG5bl_Bt7HkjDzQBYrOnYwXeQJnugV4w8lch7aFGC5qtpB7VCsb9PKuSDCQUVvHbLGFLzlEeJo0ALr1cwQeDB4pOEUskYx7-p68kjYHsAndCoZlREGw9KBkEkGnPz7Ah4pI7k8YyiXSK9phQXGqeXB4GKIebWQ_knl0hvHtaDM-AB-sxuWbv3mClKFs23GupJ4FDpx5TDmRahFhYImWXBEvB1llJcSsyhk7xVYxFG9mvxUHkA5oCOCBfobLsnr"/>
+<span class="absolute -bottom-1 -right-1 w-4 h-4 bg-yellow-400 border-2 border-white rounded-full"></span>
+</div>
+<div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white">Linda Smith</h3>
+<p class="text-sm text-slate-500">Female, 62y</p>
+<p class="text-xs font-mono text-slate-400 mt-0.5">ID: #9921-B</p>
+</div>
+</div>
+<!-- Risk Ring: Yellow -->
+<div class="relative w-14 h-14 flex items-center justify-center">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<circle class="text-slate-200 dark:text-slate-700 stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="8"></circle>
+<circle class="text-yellow-400 progress-ring__circle stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251.2" stroke-dashoffset="138.16" stroke-linecap="round" stroke-width="8"></circle> <!-- 45% -->
+</svg>
+<span class="absolute text-xs font-bold text-yellow-600 dark:text-yellow-400">45%</span>
+</div>
+</div>
+<!-- AI Tag (Empty or Low urgency) -->
+<div class="mb-5 inline-flex items-center gap-1.5 px-3 py-1 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-300 text-xs font-bold rounded-full border border-yellow-100 dark:border-yellow-800/50">
+<span class="material-icons-round text-sm">insights</span>
+<span>Check Glucose Levels</span>
+</div>
+<!-- Vitals Grid -->
+<div class="grid grid-cols-2 gap-3 mb-5">
+<div class="bg-white/40 dark:bg-slate-800/40 p-3 rounded-xl border border-white/50 dark:border-slate-700/50">
+<div class="flex items-center gap-1 mb-1">
+<span class="material-icons-round text-slate-400 text-sm">favorite</span>
+<span class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">HR (BPM)</span>
+</div>
+<div class="flex items-end gap-2">
+<span class="text-2xl font-bold text-slate-800 dark:text-slate-100">72</span>
+<span class="text-xs font-bold text-slate-400 mb-1">-</span>
+</div>
+</div>
+<div class="bg-white/40 dark:bg-slate-800/40 p-3 rounded-xl border border-white/50 dark:border-slate-700/50">
+<div class="flex items-center gap-1 mb-1">
+<span class="material-icons-round text-slate-400 text-sm">speed</span>
+<span class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">BP (mmHg)</span>
+</div>
+<div class="flex items-end gap-2">
+<span class="text-2xl font-bold text-slate-800 dark:text-slate-100">120/80</span>
+</div>
+</div>
+</div>
+<!-- Actions -->
+<div class="flex gap-2">
+<button class="flex-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 py-2 rounded-lg text-sm font-semibold shadow-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">Details</button>
+<button class="flex-1 bg-primary/10 text-primary py-2 rounded-lg text-sm font-semibold hover:bg-primary/20 transition-colors">Monitor</button>
+</div>
+</div>
+<!-- Card 3: Low Risk -->
+<div class="glass-panel rounded-2xl p-6 relative group hover:-translate-y-1 transition-transform duration-300">
+<div class="absolute top-0 left-0 w-full h-1.5 bg-primary rounded-t-2xl"></div>
+<div class="flex justify-between items-start mb-6">
+<div class="flex gap-4">
+<div class="relative">
+<img alt="Patient avatar male young" class="w-14 h-14 rounded-xl object-cover shadow-md" data-alt="Young male patient portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDcmHiF6FjTv2tZl_cyfyIzKfAyrNiyj3iBBSI_bcSJRgZiCl7LLL0l3VpleziE_zDMrW7d5hhnca0I6LE7VAQvP8fetyAkYkyJnPq0KGWEFe9Fi23LRhdlMmnCmiL4PxO0VS42fnePu8mGAFurphrvf8LbpeUoiVKUMZ_mTHzywI0aYpc5S8SltVOgPbEnxaWN19h00w-zSZ8lhyZmYQaFCL-HQTTnk-NrN9NoX_YqsQ-EGQ-xp0kjIzGASdxHKOOAxIDnQnwBu2oD"/>
+<span class="absolute -bottom-1 -right-1 w-4 h-4 bg-primary border-2 border-white rounded-full"></span>
+</div>
+<div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white">Robert Tables</h3>
+<p class="text-sm text-slate-500">Male, 29y</p>
+<p class="text-xs font-mono text-slate-400 mt-0.5">ID: #4432-C</p>
+</div>
+</div>
+<!-- Risk Ring: Primary -->
+<div class="relative w-14 h-14 flex items-center justify-center">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<circle class="text-slate-200 dark:text-slate-700 stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="8"></circle>
+<circle class="text-primary progress-ring__circle stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251.2" stroke-dashoffset="221.05" stroke-linecap="round" stroke-width="8"></circle> <!-- 12% -->
+</svg>
+<span class="absolute text-xs font-bold text-primary">12%</span>
+</div>
+</div>
+<!-- AI Tag (Stable) -->
+<div class="mb-5 inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 dark:bg-blue-900/20 text-primary dark:text-blue-300 text-xs font-bold rounded-full border border-blue-100 dark:border-blue-800/50">
+<span class="material-icons-round text-sm">check_circle</span>
+<span>Stable - Post Op Day 2</span>
+</div>
+<!-- Vitals Grid -->
+<div class="grid grid-cols-2 gap-3 mb-5">
+<div class="bg-white/40 dark:bg-slate-800/40 p-3 rounded-xl border border-white/50 dark:border-slate-700/50">
+<div class="flex items-center gap-1 mb-1">
+<span class="material-icons-round text-slate-400 text-sm">favorite</span>
+<span class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">HR (BPM)</span>
+</div>
+<div class="flex items-end gap-2">
+<span class="text-2xl font-bold text-slate-800 dark:text-slate-100">60</span>
+</div>
+</div>
+<div class="bg-white/40 dark:bg-slate-800/40 p-3 rounded-xl border border-white/50 dark:border-slate-700/50">
+<div class="flex items-center gap-1 mb-1">
+<span class="material-icons-round text-slate-400 text-sm">speed</span>
+<span class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">BP (mmHg)</span>
+</div>
+<div class="flex items-end gap-2">
+<span class="text-2xl font-bold text-slate-800 dark:text-slate-100">118/75</span>
+</div>
+</div>
+</div>
+<!-- Actions -->
+<div class="flex gap-2">
+<button class="flex-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 py-2 rounded-lg text-sm font-semibold shadow-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">Details</button>
+<button class="flex-1 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 py-2 rounded-lg text-sm font-semibold shadow-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">Discharge</button>
+</div>
+</div>
+<!-- Card 4: Monitoring (Low Risk) -->
+<div class="glass-panel rounded-2xl p-6 relative group hover:-translate-y-1 transition-transform duration-300">
+<div class="absolute top-0 left-0 w-full h-1.5 bg-primary/40 rounded-t-2xl"></div>
+<div class="flex justify-between items-start mb-6">
+<div class="flex gap-4">
+<div class="relative">
+<img alt="Patient avatar female diverse" class="w-14 h-14 rounded-xl object-cover shadow-md opacity-80" data-alt="Professional woman patient portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBbNedpzmuNr5YFj8ZlhK2bnvrg3inLtbvURpaAiOilzki0N1lDMnsGghbGDW6NKZzeXliEGPAAK9X5wUiHYIvdMYDp3oAm7_PC3RMiwCT-TPcJqfW90_TCyLWkM-aAxSwV_-KRkA7S51fASbvjKejzC1To9Xey_b59FZdKFXNhUMgc9jBUZwoVZDoj0Fn8tCJ5vQJxsu-Dmwjdc1aJaHU-FRAGlyCecCt3m6qRnpKTuMm5WC1t4czErpnXJ-irTX3ZZeLxovCig8BM"/>
+<span class="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-white rounded-full"></span>
+</div>
+<div>
+<h3 class="text-lg font-bold text-slate-900 dark:text-white">Anita Roy</h3>
+<p class="text-sm text-slate-500">Female, 33y</p>
+<p class="text-xs font-mono text-slate-400 mt-0.5">ID: #1102-D</p>
+</div>
+</div>
+<!-- Risk Ring: Green -->
+<div class="relative w-14 h-14 flex items-center justify-center">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<circle class="text-slate-200 dark:text-slate-700 stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="8"></circle>
+<circle class="text-green-500 progress-ring__circle stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251.2" stroke-dashoffset="238.64" stroke-linecap="round" stroke-width="8"></circle> <!-- 5% -->
+</svg>
+<span class="absolute text-xs font-bold text-green-600 dark:text-green-400">5%</span>
+</div>
+</div>
+<!-- AI Tag (Stable) -->
+<div class="mb-5 inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 dark:bg-slate-700/50 text-slate-600 dark:text-slate-300 text-xs font-bold rounded-full border border-slate-200 dark:border-slate-600">
+<span class="material-icons-round text-sm">hourglass_empty</span>
+<span>Waiting for Lab Results</span>
+</div>
+<!-- Vitals Grid -->
+<div class="grid grid-cols-2 gap-3 mb-5">
+<div class="bg-white/40 dark:bg-slate-800/40 p-3 rounded-xl border border-white/50 dark:border-slate-700/50 opacity-75">
+<div class="flex items-center gap-1 mb-1">
+<span class="material-icons-round text-slate-400 text-sm">favorite</span>
+<span class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">HR (BPM)</span>
+</div>
+<div class="flex items-end gap-2">
+<span class="text-2xl font-bold text-slate-800 dark:text-slate-100">68</span>
+</div>
+</div>
+<div class="bg-white/40 dark:bg-slate-800/40 p-3 rounded-xl border border-white/50 dark:border-slate-700/50 opacity-75">
+<div class="flex items-center gap-1 mb-1">
+<span class="material-icons-round text-slate-400 text-sm">speed</span>
+<span class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">BP (mmHg)</span>
+</div>
+<div class="flex items-end gap-2">
+<span class="text-2xl font-bold text-slate-800 dark:text-slate-100">110/70</span>
+</div>
+</div>
+</div>
+<!-- Actions -->
+<div class="flex gap-2">
+<button class="flex-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 py-2 rounded-lg text-sm font-semibold shadow-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">Details</button>
+<button class="flex-1 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 py-2 rounded-lg text-sm font-semibold shadow-sm border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">Contact</button>
+</div>
+</div>
+</div>
+</main>
+<!-- Floating Action Button -->
+<div class="fixed bottom-8 right-8 z-50">
+<button class="flex items-center justify-center w-16 h-16 bg-primary hover:bg-blue-600 text-white rounded-full shadow-lg shadow-blue-500/40 transition-all hover:scale-110 active:scale-95 group">
+<span class="material-icons-round text-3xl group-hover:rotate-90 transition-transform duration-300">add</span>
+<span class="sr-only">Add Patient</span>
+</button>
+</div>
+</body></html>
