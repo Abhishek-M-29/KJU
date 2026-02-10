@@ -1,0 +1,12 @@
+{
+	"servers": {
+		"Hospital": {
+			"url": "http://127.0.0.1:8005/mcp/",
+			"type": "http"
+		},
+		"HospitalDB": {
+			"url": "http://127.0.0.1:8069/mcp/",
+			"type": "http"
+		}
+	}
+}
