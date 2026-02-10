@@ -53,7 +53,7 @@ logs/
 *.sqlite3
 
 # Synthea JAR (large file)
-#synthea-with-dependencies.jar
+synthea-with-dependencies.jar
 
 # Synthea output - ignore all generated data
 synthea_output/
