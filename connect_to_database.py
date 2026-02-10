@@ -1053,10 +1053,72 @@ def test_all_connections() -> dict:
 
 
 if __name__ == "__main__":
-    print(f"Database Config - Host: {DB_HOST}, User: {DB_USER}, DB: {DB_NAME}, Port: {DB_PORT}")
+    import argparse
+    import socket
+    
+    parser = argparse.ArgumentParser(description="Healthcare Database MCP Server")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0 for all interfaces)")
+    parser.add_argument("--port", type=int, default=8069, help="Port to listen on (default: 8069)")
+    parser.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"], help="Log level")
+    args = parser.parse_args()
+    
+    # Get local IP addresses for network access
+    def get_local_ips():
+        ips = []
+        try:
+            # Get all network interfaces
+            hostname = socket.gethostname()
+            ips.append(f"localhost:{args.port}")
+            ips.append(f"127.0.0.1:{args.port}")
+            
+            # Try to get LAN IP
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(("8.8.8.8", 80))
+                lan_ip = s.getsockname()[0]
+                ips.append(f"{lan_ip}:{args.port}")
+            except Exception:
+                pass
+            finally:
+                s.close()
+            
+            # Also try hostname resolution
+            try:
+                host_ip = socket.gethostbyname(hostname)
+                if host_ip not in ["127.0.0.1", "localhost"]:
+                    ips.append(f"{host_ip}:{args.port}")
+            except Exception:
+                pass
+                
+        except Exception as e:
+            print(f"Warning: Could not determine network IPs: {e}")
+        return ips
+    
+    print("\n" + "="*60)
+    print("🏥 HEALTHCARE DATABASE MCP SERVER")
+    print("="*60)
+    print(f"\n📊 Database Configuration:")
+    print(f"   MariaDB: {DB_HOST}:{DB_PORT}/{DB_NAME}")
+    print(f"   Neo4j:   {URI}")
+    
+    print(f"\n🌐 MCP Server Network Access URLs:")
+    for ip in get_local_ips():
+        print(f"   http://{ip}/mcp/")
+    
+    print(f"\n📋 Add to your mcp.json:")
+    print(f'''   {{
+     "servers": {{
+       "HospitalDB": {{
+         "url": "http://<IP_ADDRESS>:{args.port}/mcp/",
+         "type": "http"
+       }}
+     }}
+   }}''')
+    print("\n" + "="*60 + "\n")
+    
     mcp.run(
         transport="streamable-http",
-        host="0.0.0.0",
-        port=8069,
-        log_level="debug"
+        host=args.host,
+        port=args.port,
+        log_level=args.log_level
     )

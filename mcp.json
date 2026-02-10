@@ -7,6 +7,11 @@
 		"HospitalDB": {
 			"url": "http://127.0.0.1:8069/mcp/",
 			"type": "http"
+		},
+		"HospitalDB-Network": {
+			"url": "http://YOUR_NETWORK_IP:8069/mcp/",
+			"type": "http",
+			"_comment": "Replace YOUR_NETWORK_IP with the LAN IP shown when server starts"
 		}
 	}
 }
