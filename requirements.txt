@@ -1,0 +1,8 @@
+neo4j
+groq
+python-dotenv
+pydantic
+pydantic-settings
+requests
+fastapi
+uvicorn
