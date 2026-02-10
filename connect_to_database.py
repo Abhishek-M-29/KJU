@@ -1,6 +1,7 @@
 from fastmcp import FastMCP
 import mariadb
 import os
+import logging
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from neo4j.time import Date, DateTime, Time, Duration
@@ -11,6 +12,38 @@ import sys
 
 # Load environment variables
 load_dotenv()
+
+# =============================================================================
+# LOGGING CONFIGURATION
+# =============================================================================
+
+# Create logger
+logger = logging.getLogger("HospitalDB-MCP")
+logger.setLevel(logging.DEBUG)
+
+# Create console handler with formatting
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+
+# Create file handler for detailed logs
+log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcp_server.log')
+file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+file_handler.setLevel(logging.DEBUG)
+
+# Create formatters
+console_format = logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%H:%M:%S')
+file_format = logging.Formatter('%(asctime)s | %(levelname)-8s | %(funcName)-25s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+console_handler.setFormatter(console_format)
+file_handler.setFormatter(file_format)
+
+# Add handlers to logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+logger.info("="*60)
+logger.info("HospitalDB MCP Server - Initializing")
+logger.info("="*60)
 
 # Get DB details
 DB_HOST = os.getenv('DB_HOST')
@@ -74,13 +107,16 @@ NEO4J_AVAILABLE = False
 def check_neo4j_connection():
     """Check if Neo4j is available"""
     global NEO4J_AVAILABLE
+    logger.debug(f"Checking Neo4j connection to {URI}")
     try:
         with GraphDatabase.driver(URI, auth=AUTH) as driver:
             driver.verify_connectivity()
         NEO4J_AVAILABLE = True
+        logger.info(f"Neo4j connection verified successfully")
         return True
     except Exception as e:
         NEO4J_AVAILABLE = False
+        logger.warning(f"Neo4j connection failed: {str(e)}")
         return False
 
 # Don't fail at startup if Neo4j isn't available
@@ -101,20 +137,26 @@ mcp = FastMCP("Database")
 
 def _execute_query_neo4j_internal(cypher_query: str) -> dict:
     """Internal function to execute Neo4j queries - used by other tools."""
+    logger.debug(f"Neo4j Query: {cypher_query[:200]}..." if len(cypher_query) > 200 else f"Neo4j Query: {cypher_query}")
     try:
         with GraphDatabase.driver(URI, auth=AUTH) as driver:
             with driver.session() as session:
                 result = session.run(cypher_query)
                 records = [record.data() for record in result]
                 serialized_records = serialize_neo4j_result(records)
+                logger.debug(f"Neo4j Query returned {len(serialized_records)} records")
                 return {"results": serialized_records, "count": len(serialized_records)}
     except Exception as e:
+        logger.error(f"Neo4j Query failed: {str(e)}")
         return {"error": f"Database error: {str(e)}"}
 
 
 def _execute_query_mariadb_internal(query: str) -> dict:
     """Internal function to execute MariaDB queries - used by other tools."""
+    logger.debug(f"MariaDB Query: {query[:200]}..." if len(query) > 200 else f"MariaDB Query: {query}")
+    
     if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        logger.error("Database configuration incomplete - missing environment variables")
         return {"error": "Database configuration incomplete. Check .env file."}
     
     conn = None
@@ -133,14 +175,18 @@ def _execute_query_mariadb_internal(query: str) -> dict:
             columns = [desc[0] for desc in cursor.description]
             rows = cursor.fetchall()
             results = [dict(zip(columns, row)) for row in rows]
+            logger.debug(f"MariaDB SELECT returned {len(results)} rows")
             return {"results": results, "count": len(results)}
         else:
             conn.commit()
+            logger.debug(f"MariaDB Query executed, {cursor.rowcount} rows affected")
             return {"message": "Query executed successfully", "affected_rows": cursor.rowcount}
             
     except mariadb.Error as e:
+        logger.error(f"MariaDB Error: {str(e)}")
         return {"error": f"Database error: {str(e)}"}
     except Exception as e:
+        logger.error(f"MariaDB Unexpected Error: {str(e)}")
         return {"error": f"Unexpected error: {str(e)}"}
     finally:
         if conn:
@@ -162,7 +208,13 @@ def execute_query_neo4j(cypher_query: str) -> dict:
     Returns:
         dict: The result of the query or an error message.
     """
-    return _execute_query_neo4j_internal(cypher_query)
+    logger.info(f"[TOOL] ExcecuteQuery_Neo4j called")
+    result = _execute_query_neo4j_internal(cypher_query)
+    if "error" in result:
+        logger.warning(f"[TOOL] ExcecuteQuery_Neo4j failed: {result['error']}")
+    else:
+        logger.info(f"[TOOL] ExcecuteQuery_Neo4j success: {result.get('count', 0)} records")
+    return result
 
 
 @mcp.tool("ExecuteQuery_MariaDB")
@@ -176,7 +228,13 @@ def execute_query_mariadb(query: str) -> dict:
     Returns:
         dict: The result of the query or an error message.
     """
-    return _execute_query_mariadb_internal(query)
+    logger.info(f"[TOOL] ExecuteQuery_MariaDB called")
+    result = _execute_query_mariadb_internal(query)
+    if "error" in result:
+        logger.warning(f"[TOOL] ExecuteQuery_MariaDB failed: {result['error']}")
+    else:
+        logger.info(f"[TOOL] ExecuteQuery_MariaDB success: {result.get('count', result.get('affected_rows', 0))} rows")
+    return result
 
 
 @mcp.tool("GetPatients_MariaDB")
@@ -190,8 +248,11 @@ def get_patients_mariadb(limit: int = 100) -> dict:
     Returns:
         dict: List of patients with their basic info.
     """
+    logger.info(f"[TOOL] GetPatients_MariaDB called (limit={limit})")
     query = f"SELECT patient_id, name, dob, sex, created_at FROM Patient LIMIT {limit}"
-    return _execute_query_mariadb_internal(query)
+    result = _execute_query_mariadb_internal(query)
+    logger.info(f"[TOOL] GetPatients_MariaDB returned {result.get('count', 0)} patients")
+    return result
 
 
 @mcp.tool("GetPatientDetails_MariaDB")
@@ -205,6 +266,7 @@ def get_patient_details_mariadb(patient_id: int) -> dict:
     Returns:
         dict: Complete patient information including medical history, appointments, medications, etc.
     """
+    logger.info(f"[TOOL] GetPatientDetails_MariaDB called (patient_id={patient_id})")
     result = {
         "patient_id": patient_id,
         "basic_info": None,
@@ -269,6 +331,7 @@ def get_patient_details_mariadb(patient_id: int) -> dict:
     if report_result.get("results"):
         result["reports"] = report_result["results"]
     
+    logger.info(f"[TOOL] GetPatientDetails_MariaDB completed - history:{len(result['medical_history'])}, appts:{len(result['appointments'])}, meds:{len(result['medications'])}")
     return result
 
 
@@ -283,6 +346,7 @@ def get_patients_neo4j(limit: int = 100) -> dict:
     Returns:
         dict: List of patients from the knowledge graph.
     """
+    logger.info(f"[TOOL] GetPatients_Neo4j called (limit={limit})")
     query = f"""
         MATCH (p:Patient)
         RETURN p.patient_id as patient_id, 
@@ -292,7 +356,9 @@ def get_patients_neo4j(limit: int = 100) -> dict:
                p.created_at as created_at
         LIMIT {limit}
     """
-    return _execute_query_neo4j_internal(query)
+    result = _execute_query_neo4j_internal(query)
+    logger.info(f"[TOOL] GetPatients_Neo4j returned {result.get('count', 0)} patients")
+    return result
 
 
 @mcp.tool("GetPatientGraph_Neo4j")
@@ -306,6 +372,7 @@ def get_patient_graph_neo4j(patient_id: int) -> dict:
     Returns:
         dict: Patient node with all connected medical entities and relationships.
     """
+    logger.info(f"[TOOL] GetPatientGraph_Neo4j called (patient_id={patient_id})")
     query = f"""
         MATCH (p:Patient {{patient_id: '{patient_id}'}})
         OPTIONAL MATCH (p)-[r]->(n)
@@ -316,7 +383,9 @@ def get_patient_graph_neo4j(patient_id: int) -> dict:
         }}) as connections
         RETURN p as patient, connections
     """
-    return _execute_query_neo4j_internal(query)
+    result = _execute_query_neo4j_internal(query)
+    logger.info(f"[TOOL] GetPatientGraph_Neo4j completed for patient {patient_id}")
+    return result
 
 
 @mcp.tool("SyncMariaDBToNeo4j")
@@ -331,6 +400,7 @@ def sync_mariadb_to_neo4j(clear_existing: bool = True) -> dict:
     Returns:
         dict: Sync status and summary.
     """
+    logger.info(f"[TOOL] SyncMariaDBToNeo4j called (clear_existing={clear_existing})")
     try:
         # Import the sync module
         from sync_mariadb_to_neo4j import sync_all
@@ -338,19 +408,23 @@ def sync_mariadb_to_neo4j(clear_existing: bool = True) -> dict:
         success = sync_all(clear_existing=clear_existing)
         
         if success:
+            logger.info("[TOOL] SyncMariaDBToNeo4j completed successfully")
             return {
                 "status": "success",
                 "message": "Successfully synchronized MariaDB data to Neo4j knowledge graph",
                 "clear_existing": clear_existing
             }
         else:
+            logger.error("[TOOL] SyncMariaDBToNeo4j failed")
             return {
                 "status": "error",
                 "message": "Synchronization failed. Check logs for details."
             }
     except ImportError as e:
+        logger.error(f"[TOOL] SyncMariaDBToNeo4j import error: {str(e)}")
         return {"error": f"Could not import sync module: {str(e)}"}
     except Exception as e:
+        logger.error(f"[TOOL] SyncMariaDBToNeo4j exception: {str(e)}")
         return {"error": f"Sync failed: {str(e)}"}
 
 
@@ -366,6 +440,7 @@ def populate_mariadb(num_patients: int = 10, clear_existing: bool = True) -> dic
     Returns:
         dict: Population status and created patient IDs.
     """
+    logger.info(f"[TOOL] PopulateMariaDB called (num_patients={num_patients}, clear_existing={clear_existing})")
     try:
         # Import the population module
         from populate_mariadb import populate_database
@@ -373,6 +448,7 @@ def populate_mariadb(num_patients: int = 10, clear_existing: bool = True) -> dic
         patient_ids = populate_database(num_patients=num_patients, clear_existing=clear_existing)
         
         if patient_ids:
+            logger.info(f"[TOOL] PopulateMariaDB created {len(patient_ids)} patients")
             return {
                 "status": "success",
                 "message": f"Successfully created {len(patient_ids)} patients",
@@ -380,13 +456,16 @@ def populate_mariadb(num_patients: int = 10, clear_existing: bool = True) -> dic
                 "num_patients": len(patient_ids)
             }
         else:
+            logger.error("[TOOL] PopulateMariaDB failed - no patients created")
             return {
                 "status": "error",
                 "message": "Population failed. Check logs for details."
             }
     except ImportError as e:
+        logger.error(f"[TOOL] PopulateMariaDB import error: {str(e)}")
         return {"error": f"Could not import population module: {str(e)}"}
     except Exception as e:
+        logger.error(f"[TOOL] PopulateMariaDB exception: {str(e)}")
         return {"error": f"Population failed: {str(e)}"}
 
 
@@ -398,6 +477,7 @@ def get_database_stats() -> dict:
     Returns:
         dict: Counts and statistics from both databases.
     """
+    logger.info("[TOOL] GetDatabaseStats called")
     stats = {
         "mariadb": {},
         "neo4j": {}
@@ -432,6 +512,7 @@ def get_database_stats() -> dict:
     """
     rel_result = _execute_query_neo4j_internal(rel_query)
     
+    logger.info(f"[TOOL] GetDatabaseStats completed - MariaDB tables: {len(stats['mariadb'])}, Neo4j nodes: {len(stats.get('neo4j', {}).get('nodes', {}))}")
     return stats
 
 
@@ -443,6 +524,7 @@ def get_graph_schema_neo4j() -> dict:
     Returns:
         dict: Node labels, relationship types, and their counts.
     """
+    logger.info("[TOOL] GetGraphSchema_Neo4j called")
     schema = {
         "node_labels": [],
         "relationship_types": [],
@@ -483,6 +565,7 @@ def get_graph_schema_neo4j() -> dict:
     if pattern_result.get("results"):
         schema["relationship_patterns"] = pattern_result["results"]
     
+    logger.info(f"[TOOL] GetGraphSchema_Neo4j completed - labels: {len(schema['node_labels'])}, rel_types: {len(schema['relationship_types'])}")
     return schema
 
 
@@ -502,6 +585,7 @@ def create_node_neo4j(label: str, properties: dict) -> dict:
     Returns:
         dict: The created node or error message.
     """
+    logger.info(f"[TOOL] CreateNode_Neo4j called (label={label}, props={list(properties.keys())})")
     try:
         # Build property string
         prop_items = []
@@ -525,8 +609,11 @@ def create_node_neo4j(label: str, properties: dict) -> dict:
                 n.data_source = 'MCP_Created'
             RETURN n, id(n) as node_id
         """
-        return _execute_query_neo4j_internal(query)
+        result = _execute_query_neo4j_internal(query)
+        logger.info(f"[TOOL] CreateNode_Neo4j created node with label {label}")
+        return result
     except Exception as e:
+        logger.error(f"[TOOL] CreateNode_Neo4j failed: {str(e)}")
         return {"error": f"Failed to create node: {str(e)}"}
 
 
@@ -544,6 +631,7 @@ def update_node_neo4j(label: str, match_property: str, match_value: str, updates
     Returns:
         dict: The updated node or error message.
     """
+    logger.info(f"[TOOL] UpdateNode_Neo4j called (label={label}, {match_property}={match_value})")
     try:
         # Build SET clause
         set_items = []
@@ -567,8 +655,11 @@ def update_node_neo4j(label: str, match_property: str, match_value: str, updates
                 n.last_updated = datetime()
             RETURN n
         """
-        return _execute_query_neo4j_internal(query)
+        result = _execute_query_neo4j_internal(query)
+        logger.info(f"[TOOL] UpdateNode_Neo4j updated node {label}:{match_value}")
+        return result
     except Exception as e:
+        logger.error(f"[TOOL] UpdateNode_Neo4j failed: {str(e)}")
         return {"error": f"Failed to update node: {str(e)}"}
 
 
@@ -586,6 +677,7 @@ def delete_node_neo4j(label: str, match_property: str, match_value: str, detach:
     Returns:
         dict: Confirmation message or error.
     """
+    logger.info(f"[TOOL] DeleteNode_Neo4j called (label={label}, {match_property}={match_value}, detach={detach})")
     try:
         delete_cmd = "DETACH DELETE n" if detach else "DELETE n"
         
@@ -595,8 +687,10 @@ def delete_node_neo4j(label: str, match_property: str, match_value: str, detach:
             RETURN count(*) as deleted_count
         """
         result = _execute_query_neo4j_internal(query)
+        logger.info(f"[TOOL] DeleteNode_Neo4j deleted node {label}:{match_value}")
         return {"status": "success", "message": f"Node deletion executed", "result": result}
     except Exception as e:
+        logger.error(f"[TOOL] DeleteNode_Neo4j failed: {str(e)}")
         return {"error": f"Failed to delete node: {str(e)}"}
 
 
@@ -622,6 +716,7 @@ def create_relationship_neo4j(
     Returns:
         dict: The created relationship or error message.
     """
+    logger.info(f"[TOOL] CreateRelationship_Neo4j called ({from_label})-[{relationship_type}]->({to_label})")
     try:
         # Build properties string if provided
         props_str = ""
@@ -648,8 +743,11 @@ def create_relationship_neo4j(
             SET r += {props_str}
             RETURN a, r, b
         """
-        return _execute_query_neo4j_internal(query)
+        result = _execute_query_neo4j_internal(query)
+        logger.info(f"[TOOL] CreateRelationship_Neo4j created {relationship_type} relationship")
+        return result
     except Exception as e:
+        logger.error(f"[TOOL] CreateRelationship_Neo4j failed: {str(e)}")
         return {"error": f"Failed to create relationship: {str(e)}"}
 
 
@@ -674,6 +772,7 @@ def delete_relationship_neo4j(
     Returns:
         dict: Confirmation message or error.
     """
+    logger.info(f"[TOOL] DeleteRelationship_Neo4j called ({from_label})-[{relationship_type}]->({to_label})")
     try:
         query = f"""
             MATCH (a:{from_label} {{{from_property}: "{from_value}"}})-[r:{relationship_type}]->(b:{to_label} {{{to_property}: "{to_value}"}})
@@ -681,8 +780,10 @@ def delete_relationship_neo4j(
             RETURN count(*) as deleted_count
         """
         result = _execute_query_neo4j_internal(query)
+        logger.info(f"[TOOL] DeleteRelationship_Neo4j deleted {relationship_type} relationship")
         return {"status": "success", "message": "Relationship deleted", "result": result}
     except Exception as e:
+        logger.error(f"[TOOL] DeleteRelationship_Neo4j failed: {str(e)}")
         return {"error": f"Failed to delete relationship: {str(e)}"}
 
 
@@ -707,6 +808,7 @@ def run_synthea_pipeline(num_patients: int = 50, state: str = "Massachusetts", c
     Returns:
         dict: Pipeline execution status and summary.
     """
+    logger.info(f"[TOOL] RunSyntheaPipeline called (patients={num_patients}, state={state}, city={city})")
     try:
         cmd = [sys.executable, 'synthea_pipeline.py', '-p', str(num_patients), '-s', state]
         if city:
@@ -723,6 +825,11 @@ def run_synthea_pipeline(num_patients: int = 50, state: str = "Massachusetts", c
             cwd=os.path.dirname(os.path.abspath(__file__))
         )
         
+        if result.returncode == 0:
+            logger.info("[TOOL] RunSyntheaPipeline completed successfully")
+        else:
+            logger.error(f"[TOOL] RunSyntheaPipeline failed with return code {result.returncode}")
+        
         return {
             "status": "success" if result.returncode == 0 else "error",
             "message": f"Pipeline {'completed' if result.returncode == 0 else 'failed'}",
@@ -730,6 +837,7 @@ def run_synthea_pipeline(num_patients: int = 50, state: str = "Massachusetts", c
             "errors": result.stderr[-1000:] if result.stderr else None
         }
     except Exception as e:
+        logger.error(f"[TOOL] RunSyntheaPipeline exception: {str(e)}")
         return {"error": f"Pipeline failed: {str(e)}"}
 
 
@@ -746,6 +854,7 @@ def load_synthea_to_mariadb(synthea_dir: str = None, clear_existing: bool = True
     Returns:
         dict: Load status and summary.
     """
+    logger.info(f"[TOOL] LoadSyntheaToMariaDB called (dir={synthea_dir}, clear={clear_existing})")
     try:
         cmd = [sys.executable, 'synthea_to_mariadb.py']
         if synthea_dir:
@@ -762,6 +871,11 @@ def load_synthea_to_mariadb(synthea_dir: str = None, clear_existing: bool = True
             cwd=os.path.dirname(os.path.abspath(__file__))
         )
         
+        if result.returncode == 0:
+            logger.info("[TOOL] LoadSyntheaToMariaDB completed successfully")
+        else:
+            logger.error(f"[TOOL] LoadSyntheaToMariaDB failed with return code {result.returncode}")
+        
         return {
             "status": "success" if result.returncode == 0 else "error",
             "message": "Successfully loaded Synthea data into MariaDB" if result.returncode == 0 else "Loading failed",
@@ -769,6 +883,7 @@ def load_synthea_to_mariadb(synthea_dir: str = None, clear_existing: bool = True
             "errors": result.stderr[-1000:] if result.stderr else None
         }
     except Exception as e:
+        logger.error(f"[TOOL] LoadSyntheaToMariaDB exception: {str(e)}")
         return {"error": f"Load failed: {str(e)}"}
 
 
@@ -786,6 +901,7 @@ def sync_synthea_to_neo4j(clear_existing: bool = True, skip_observations: bool =
     Returns:
         dict: Sync status and summary.
     """
+    logger.info(f"[TOOL] SyncSyntheaToNeo4j called (clear={clear_existing}, skip_obs={skip_observations})")
     try:
         cmd = [sys.executable, 'synthea_to_neo4j.py']
         if clear_existing:
@@ -802,6 +918,11 @@ def sync_synthea_to_neo4j(clear_existing: bool = True, skip_observations: bool =
             cwd=os.path.dirname(os.path.abspath(__file__))
         )
         
+        if result.returncode == 0:
+            logger.info("[TOOL] SyncSyntheaToNeo4j completed successfully")
+        else:
+            logger.error(f"[TOOL] SyncSyntheaToNeo4j failed with return code {result.returncode}")
+        
         return {
             "status": "success" if result.returncode == 0 else "error",
             "message": "Successfully synced to Neo4j" if result.returncode == 0 else "Sync failed",
@@ -809,6 +930,7 @@ def sync_synthea_to_neo4j(clear_existing: bool = True, skip_observations: bool =
             "errors": result.stderr[-1000:] if result.stderr else None
         }
     except Exception as e:
+        logger.error(f"[TOOL] SyncSyntheaToNeo4j exception: {str(e)}")
         return {"error": f"Sync failed: {str(e)}"}
 
 
@@ -829,6 +951,7 @@ def get_patient_ai_features(patient_id: str = None, limit: int = 50) -> dict:
     Returns:
         dict: AI features for cardiovascular and diabetes models.
     """
+    logger.info(f"[TOOL] GetPatientAIFeatures called (patient_id={patient_id}, limit={limit})")
     if patient_id:
         query = f"""
             MATCH (p:Patient {{synthea_id: "{patient_id}"}})-[:HAS_AI_FEATURES]->(ai:AIFeatureSet)
@@ -871,7 +994,9 @@ def get_patient_ai_features(patient_id: str = None, limit: int = 50) -> dict:
             LIMIT {limit}
         """
     
-    return _execute_query_neo4j_internal(query)
+    result = _execute_query_neo4j_internal(query)
+    logger.info(f"[TOOL] GetPatientAIFeatures returned {result.get('count', 0)} records")
+    return result
 
 
 @mcp.tool("GetPatientRiskFactors")
@@ -885,6 +1010,7 @@ def get_patient_risk_factors(patient_id: str = None) -> dict:
     Returns:
         dict: Patients and their associated risk factors.
     """
+    logger.info(f"[TOOL] GetPatientRiskFactors called (patient_id={patient_id})")
     if patient_id:
         query = f"""
             MATCH (p:Patient {{synthea_id: "{patient_id}"}})-[:HAS_RISK_FACTOR]->(rf:RiskFactor)
@@ -908,7 +1034,9 @@ def get_patient_risk_factors(patient_id: str = None) -> dict:
             LIMIT 50
         """
     
-    return _execute_query_neo4j_internal(query)
+    result = _execute_query_neo4j_internal(query)
+    logger.info(f"[TOOL] GetPatientRiskFactors returned {result.get('count', 0)} records")
+    return result
 
 
 @mcp.tool("GetHighRiskPatients")
@@ -923,6 +1051,7 @@ def get_high_risk_patients(risk_type: str = "all", threshold: int = 2) -> dict:
     Returns:
         dict: List of high-risk patients with their risk details.
     """
+    logger.info(f"[TOOL] GetHighRiskPatients called (risk_type={risk_type}, threshold={threshold})")
     query = f"""
         MATCH (p:Patient)-[:HAS_RISK_FACTOR]->(rf:RiskFactor)
         WITH p, collect(rf.name) as risks, count(rf) as risk_count
@@ -938,7 +1067,9 @@ def get_high_risk_patients(risk_type: str = "all", threshold: int = 2) -> dict:
         ORDER BY risk_count DESC
     """
     
-    return _execute_query_neo4j_internal(query)
+    result = _execute_query_neo4j_internal(query)
+    logger.info(f"[TOOL] GetHighRiskPatients returned {result.get('count', 0)} high-risk patients")
+    return result
 
 
 @mcp.tool("AnalyzePatientHealth")
@@ -953,6 +1084,7 @@ def analyze_patient_health(patient_id: str) -> dict:
     Returns:
         dict: Comprehensive patient health analysis.
     """
+    logger.info(f"[TOOL] AnalyzePatientHealth called (patient_id={patient_id})")
     query = f"""
         MATCH (p:Patient {{synthea_id: "{patient_id}"}})
         
@@ -988,7 +1120,9 @@ def analyze_patient_health(patient_id: str) -> dict:
                allergies
     """
     
-    return _execute_query_neo4j_internal(query)
+    result = _execute_query_neo4j_internal(query)
+    logger.info(f"[TOOL] AnalyzePatientHealth completed for patient {patient_id}")
+    return result
 
 
 # =============================================================================
@@ -1003,6 +1137,7 @@ def test_all_connections() -> dict:
     Returns:
         dict: Status of all database connections.
     """
+    logger.info("[TOOL] TestAllConnections called")
     results = {
         "mariadb": {"status": "unknown", "message": ""},
         "neo4j": {"status": "unknown", "message": ""}
@@ -1049,6 +1184,7 @@ def test_all_connections() -> dict:
             "message": str(e)
         }
     
+    logger.info(f"[TOOL] TestAllConnections completed - MariaDB: {results['mariadb']['status']}, Neo4j: {results['neo4j']['status']}")
     return results
 
 
