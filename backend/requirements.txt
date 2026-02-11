@@ -1,0 +1,15 @@
+# MediMax Backend API Requirements
+# =================================
+
+# Web Framework
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# Data Validation
+pydantic>=2.6.0
+
+# HTTP Client (for calling MCP API)
+httpx>=0.27.0
+
+# File uploads (if needed later)
+python-multipart>=0.0.6
