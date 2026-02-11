@@ -18,7 +18,7 @@ export function Header({ doctor, notifications = [] }: HeaderProps) {
         {/* Left: Brand */}
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center">
-            <span className="text-white font-bold text-sm">Kju</span>
+            <span className="text-white font-bold text-xs">Aegis</span>
           </div>
           <div className="hidden sm:block">
             <h1 className="text-base font-semibold text-stone-900 leading-tight">Medical Command</h1>

@@ -88,14 +88,14 @@ Fetch all notifications for a doctor.
       "id": "notif-001",
       "type": "urgent",
       "message": "Critical vitals detected for Robert Kim",
-      "patientId": "pat-003",
+      "patientId": "3",
       "timestamp": "2026-02-10T09:30:00Z"
     },
     {
       "id": "notif-002",
       "type": "warning",
       "message": "Blood pressure elevated for Maria Garcia",
-      "patientId": "pat-002",
+      "patientId": "2",
       "timestamp": "2026-02-10T08:15:00Z"
     }
   ]
@@ -138,7 +138,7 @@ List all patients for a doctor.
 {
   "patients": [
     {
-      "id": "pat-001",
+      "id": "1",
       "name": "John Anderson",
       "age": 45,
       "sex": "M",
@@ -147,7 +147,7 @@ List all patients for a doctor.
       "riskLevel": "low"
     },
     {
-      "id": "pat-003",
+      "id": "3",
       "name": "Robert Kim",
       "age": 71,
       "sex": "M",
@@ -163,7 +163,7 @@ List all patients for a doctor.
 
 ```json
 {
-  "id": "string — unique patient identifier (e.g. pat-001)",
+  "id": "string — unique patient identifier (e.g. 1)",
   "name": "string — full name",
   "age": "number — age in years",
   "sex": "string — 'M' or 'F'",
@@ -186,7 +186,7 @@ Get a single patient's full record.
 ```json
 {
   "doctorId": "doc-001",
-  "patientId": "pat-001"
+  "patientId": "1"
 }
 ```
 
@@ -194,7 +194,7 @@ Get a single patient's full record.
 
 ```json
 {
-  "id": "pat-003",
+  "id": "3",
   "name": "Robert Kim",
   "age": 71,
   "sex": "M",
@@ -284,7 +284,7 @@ Create a new patient record.
 
 ```json
 {
-  "id": "pat-007",
+  "id": "7",
   "name": "Jane Doe",
   "age": 52,
   "sex": "F",
@@ -329,7 +329,7 @@ Fetch existing chat/query history for a patient.
 ```json
 {
   "doctorId": "doc-001",
-  "patientId": "pat-001"
+  "patientId": "1"
 }
 ```
 
@@ -378,7 +378,7 @@ Send a query about a patient to the Knowledge Graph / RAG pipeline.
 ```json
 {
   "doctorId": "doc-001",
-  "patientId": "pat-001",
+  "patientId": "1",
   "message": "What is the patient's cardiac history?"
 }
 ```
@@ -466,7 +466,7 @@ Kick off the agentic diagnostic pipeline (ML Swarm + MedGamma).
 ```json
 {
   "doctorId": "doc-001",
-  "patientId": "pat-003",
+  "patientId": "3",
   "observations": "Patient reports increased shortness of breath over the past 48 hours. Orthopnea noted. Lower extremity edema observed during examination.",
   "uploadIds": ["upl-001", "upl-002"]
 }
@@ -477,7 +477,7 @@ Kick off the agentic diagnostic pipeline (ML Swarm + MedGamma).
 ```json
 {
   "jobId": "diag-job-001",
-  "patientId": "pat-003",
+  "patientId": "3",
   "status": "processing",
   "startedAt": "2026-02-10T10:05:00Z"
 }
@@ -562,7 +562,7 @@ Fetch the full generated diagnostic report.
 ```json
 {
   "jobId": "diag-job-001",
-  "patientId": "pat-003",
+  "patientId": "3",
   "generatedAt": "2026-02-10T10:06:42Z",
   "status": "draft",
   "executiveSummary": "Based on comprehensive analysis of clinical data, laboratory results, and historical trends, the patient presents with elevated cardiovascular risk requiring immediate clinical attention. The integrated ML swarm analysis identified persistent atrial fibrillation with suboptimal rate control as the primary driver, compounded by progressive heart failure symptoms evidenced by reduced ejection fraction (35%) and new-onset dyspnea. Anticoagulation therapy appears adequate with therapeutic INR levels. However, the confluence of uncontrolled hypertension, elevated fasting glucose, and declining renal function creates a synergistic risk profile warranting aggressive intervention and close monitoring.",
@@ -716,7 +716,7 @@ Returns the **full updated report** (same schema as 7.1):
 ```json
 {
   "jobId": "diag-job-001",
-  "patientId": "pat-003",
+  "patientId": "3",
   "generatedAt": "2026-02-10T10:12:30Z",
   "status": "draft",
   "executiveSummary": "Updated executive summary incorporating physician's notes about new medication and family history...",
@@ -803,7 +803,7 @@ Download the report as a PDF file.
 
 ```
 Content-Type: application/pdf
-Content-Disposition: attachment; filename="report-pat-003-diag-job-001.pdf"
+Content-Disposition: attachment; filename="report-3-diag-job-001.pdf"
 
 <binary PDF data>
 ```
@@ -842,7 +842,7 @@ Save the finalized report to the patient's permanent record (PostgreSQL Vector D
 {
   "success": true,
   "recordId": "rec-2026-0210-001",
-  "patientId": "pat-003",
+  "patientId": "3",
   "committedAt": "2026-02-10T10:25:00Z",
   "committedBy": "doc-001"
 }

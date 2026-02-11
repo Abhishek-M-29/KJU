@@ -16,7 +16,7 @@ export function Sidebar({ onLogout }: SidebarProps) {
     <aside className="w-64 h-screen fixed left-0 top-0 glass-card rounded-none rounded-r-3xl p-6 flex flex-col">
       {/* Logo */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold gradient-text">Kju</h1>
+        <h1 className="text-2xl font-bold gradient-text">Aegis</h1>
         <p className="text-xs text-text-muted">Medical Systems</p>
       </div>
 

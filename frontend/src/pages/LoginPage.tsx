@@ -5,17 +5,21 @@ import { Fingerprint } from 'lucide-react'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
 export function LoginPage() {
   const navigate = useNavigate()
   const [licenseId, setLicenseId] = useState('')
   const [password, setPassword] = useState('')
   const [isScanning, setIsScanning] = useState(false)
   const [scanComplete, setScanComplete] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
+    setError(null)
     setIsScanning(true)
-    await new Promise((resolve) => setTimeout(resolve, 2000))
+
     setScanComplete(true)
     await new Promise((resolve) => setTimeout(resolve, 400))
     navigate('/dashboard')
@@ -45,7 +49,7 @@ export function LoginPage() {
               animate={{ scale: 1, opacity: 1 }}
               transition={{ delay: 0.1, type: 'spring', stiffness: 200 }}
             >
-              <span className="text-white font-bold text-lg">Kju</span>
+              <span className="text-white font-bold text-lg">Aegis</span>
             </motion.div>
             <h1 className="text-xl font-display font-semibold text-stone-900">Welcome back</h1>
             <p className="text-stone-500 text-sm mt-1">Sign in to continue</p>
@@ -59,7 +63,6 @@ export function LoginPage() {
               placeholder="ML-XXXX-XXXX"
               value={licenseId}
               onChange={(e) => setLicenseId(e.target.value)}
-              required
             />
 
             <Input
@@ -69,8 +72,11 @@ export function LoginPage() {
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required
             />
+
+            {error && (
+              <p className="text-red-500 text-sm text-center">{error}</p>
+            )}
 
             <div className="pt-2">
               <Button

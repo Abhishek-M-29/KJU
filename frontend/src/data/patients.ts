@@ -9,7 +9,7 @@ export const mockDoctor: Doctor = {
 
 export const mockPatients: Patient[] = [
   {
-    id: 'pat-001',
+    id: '1',
     name: 'John Anderson',
     age: 45,
     sex: 'M',
@@ -40,7 +40,7 @@ export const mockPatients: Patient[] = [
     lastVisit: '2026-02-08',
   },
   {
-    id: 'pat-002',
+    id: '2',
     name: 'Maria Garcia',
     age: 62,
     sex: 'F',
@@ -71,7 +71,7 @@ export const mockPatients: Patient[] = [
     lastVisit: '2026-02-09',
   },
   {
-    id: 'pat-003',
+    id: '3',
     name: 'Robert Kim',
     age: 71,
     sex: 'M',
@@ -102,7 +102,7 @@ export const mockPatients: Patient[] = [
     lastVisit: '2026-02-10',
   },
   {
-    id: 'pat-004',
+    id: '4',
     name: 'Emily Thompson',
     age: 34,
     sex: 'F',
@@ -133,7 +133,7 @@ export const mockPatients: Patient[] = [
     lastVisit: '2026-02-07',
   },
   {
-    id: 'pat-005',
+    id: '5',
     name: 'David Patel',
     age: 58,
     sex: 'M',
@@ -164,7 +164,7 @@ export const mockPatients: Patient[] = [
     lastVisit: '2026-02-10',
   },
   {
-    id: 'pat-006',
+    id: '6',
     name: 'Linda Chen',
     age: 29,
     sex: 'F',
@@ -197,11 +197,11 @@ export const mockPatients: Patient[] = [
 ]
 
 export const mockChatHistory: Record<string, ChatMessage[]> = {
-  'pat-001': [
+  '1': [
     { id: 'msg-1', role: 'user', content: 'What is the patient\'s cardiac history?', timestamp: new Date('2026-02-08T10:00:00') },
     { id: 'msg-2', role: 'assistant', content: 'Patient John Anderson has a documented history of stable angina pectoris, first diagnosed in 2024. No prior myocardial infarction. Stress test (Jan 2026) showed good exercise tolerance with no significant ST changes. Current management includes aspirin and statin therapy with good symptom control.', timestamp: new Date('2026-02-08T10:00:05') },
   ],
-  'pat-003': [
+  '3': [
     { id: 'msg-1', role: 'user', content: 'Check for cardiac history and stroke risk', timestamp: new Date('2026-02-10T09:00:00') },
     { id: 'msg-2', role: 'assistant', content: 'Patient Robert Kim has persistent atrial fibrillation diagnosed 2023. CHA2DS2-VASc score: 5 (high stroke risk). On warfarin anticoagulation, INR therapeutic. Recent echo shows reduced EF 35%. History includes hypertensive heart disease, no prior stroke or TIA documented.', timestamp: new Date('2026-02-10T09:00:08') },
     { id: 'msg-3', role: 'user', content: 'Any contraindications for cardioversion?', timestamp: new Date('2026-02-10T09:15:00') },
@@ -214,14 +214,14 @@ export const mockNotifications: Notification[] = [
     id: 'notif-001',
     type: 'urgent',
     message: 'Critical vitals detected for Robert Kim',
-    patientId: 'pat-003',
+    patientId: '3',
     timestamp: new Date('2026-02-10T09:30:00'),
   },
   {
     id: 'notif-002',
     type: 'warning',
     message: 'Blood pressure elevated for Maria Garcia',
-    patientId: 'pat-002',
+    patientId: '2',
     timestamp: new Date('2026-02-10T08:15:00'),
   },
 ]

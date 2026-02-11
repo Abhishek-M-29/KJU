@@ -16,9 +16,13 @@ import {
   TrendingUp,
   Beaker,
   Play,
+  Loader2,
 } from 'lucide-react'
 import { mockPatients, mockChatHistory } from '@/data/patients'
 import type { ChatMessage } from '@/types/patient'
+
+const DOCUMENTS_API_URL = 'http://172.18.4.108:8000/api/patients/uploads'
+const DIAGNOSTICS_API_URL = 'http://localhost:8000/api/diagnostics/run'
 
 type TabMode = 'insight' | 'diagnostics'
 
@@ -31,6 +35,8 @@ export function PatientHubPage() {
   const [observations, setObservations] = useState('')
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
   const [isDragging, setIsDragging] = useState(false)
+  const [isFetchingDocs, setIsFetchingDocs] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -68,17 +74,45 @@ export function PatientHubPage() {
     }, 1200)
   }
 
+  const fetchAndAggregateOcrTexts = async () => {
+    setIsFetchingDocs(true)
+    try {
+      const response = await fetch(DOCUMENTS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patient_id: 1 }),
+      })
+      const data = await response.json()
+      if (data.success && Array.isArray(data.documents)) {
+        const aggregatedText = data.documents
+          .filter((doc: any) => doc.ocr_text)
+          .map((doc: any) => {
+            const header = `===== ${doc.document_type}: ${doc.document_name} =====`
+            return `${header}\n${doc.ocr_text}`
+          })
+          .join('\n\n')
+        setObservations(aggregatedText)
+      }
+    } catch (error) {
+      console.error('Failed to fetch documents:', error)
+    } finally {
+      setIsFetchingDocs(false)
+    }
+  }
+
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
     const files = Array.from(e.dataTransfer.files)
     setUploadedFiles((prev) => [...prev, ...files])
+    fetchAndAggregateOcrTexts()
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       const files = Array.from(e.target.files)
       setUploadedFiles((prev) => [...prev, ...files])
+      fetchAndAggregateOcrTexts()
     }
   }
 
@@ -86,8 +120,40 @@ export function PatientHubPage() {
     setUploadedFiles((prev) => prev.filter((_, i) => i !== index))
   }
 
-  const handleRunDiagnostics = () => {
-    navigate('/processing')
+  const handleRunDiagnostics = async () => {
+    setIsSubmitting(true)
+    try {
+      const payload = {
+        patientId: patient.id,
+        doctorId: 'doc-001',
+        name: patient.name,
+        age: patient.age,
+        sex: patient.sex,
+        bloodType: patient.bloodType,
+        primaryCondition: patient.primaryCondition,
+        symptom: patient.symptom,
+        vitals: patient.vitals,
+        labResults: patient.labResults,
+        medications: patient.medications,
+        allergies: patient.allergies,
+        clinicalSummary: patient.clinicalSummary,
+        data: observations,
+      }
+      const response = await fetch(DIAGNOSTICS_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const result = await response.json()
+      if (result.jobId) {
+        navigate(`/processing?jobId=${result.jobId}&patientId=${patient.id}`)
+      }
+    } catch (error) {
+      console.error('Failed to start diagnostics:', error)
+      alert('Failed to start diagnostic pipeline. Check backend connection.')
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const initials = patient.name
@@ -538,13 +604,19 @@ export function PatientHubPage() {
                   <div>
                     <label className="block text-sm font-medium text-stone-700 mb-2">
                       Add Symptoms / Clinical Observations
+                      {isFetchingDocs && (
+                        <span className="ml-2 inline-flex items-center gap-1 text-xs text-primary font-normal">
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          Fetching documents...
+                        </span>
+                      )}
                     </label>
                     <textarea
                       value={observations}
                       onChange={(e) => setObservations(e.target.value)}
                       placeholder="Enter clinical observations, symptoms, or notes for MedGamma analysis..."
-                      rows={6}
-                      className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-none"
+                      rows={12}
+                      className="w-full px-4 py-3 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-none font-mono"
                     />
                   </div>
                 </div>
@@ -553,10 +625,15 @@ export function PatientHubPage() {
                 <div className="p-5 border-t border-stone-100">
                   <button
                     onClick={handleRunDiagnostics}
-                    className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-primary to-primary-dark hover:from-primary-dark hover:to-primary text-white font-semibold rounded-xl transition-all shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30"
+                    disabled={isSubmitting}
+                    className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-primary to-primary-dark hover:from-primary-dark hover:to-primary disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/30"
                   >
-                    <Play className="w-5 h-5" />
-                    Run Diagnostic Swarm
+                    {isSubmitting ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Play className="w-5 h-5" />
+                    )}
+                    {isSubmitting ? 'Starting Pipeline...' : 'Run Diagnostic Swarm'}
                   </button>
                   <p className="text-xs text-stone-400 text-center mt-2">
                     Initiates the ML Swarm & MedGamma pipeline
