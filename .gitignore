@@ -118,3 +118,4 @@ ChangedFiles/
 tmp/
 temp/
 *.tmp
+node_embeddings.json
