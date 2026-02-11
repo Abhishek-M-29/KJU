@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hybrid KG-RAG Demo</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>Hybrid KG-RAG Demo</h1>
+      <p>Semantic search + Neo4j graph + Ollama Cypher generation</p>
+    </header>
+
+    <section class="panel">
+      <div class="row">
+        <label for="query">Ask a healthcare question</label>
+        <textarea id="query" rows="3" placeholder="e.g., Show me all conditions for patients"></textarea>
+      </div>
+
+      <div class="row grid">
+        <div>
+          <label for="top_k">Top-K Semantic Matches</label>
+          <input id="top_k" type="number" min="1" max="20" value="5" />
+        </div>
+        <div>
+          <label for="expand_hops">Expand Hops</label>
+          <input id="expand_hops" type="number" min="0" max="3" value="1" />
+        </div>
+        <div>
+          <label for="num_suggestions">Cypher Suggestions</label>
+          <input id="num_suggestions" type="number" min="1" max="5" value="2" />
+        </div>
+        <div class="toggle">
+          <label>
+            <input id="execute_best" type="checkbox" checked /> Execute best query
+          </label>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="run">Run Query</button>
+        <span id="status" class="status idle">Idle</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Results</h2>
+      <div class="metrics">
+        <div><strong>Latency:</strong> <span id="latency">-</span></div>
+        <div><strong>Suggestions:</strong> <span id="suggestionCount">-</span></div>
+      </div>
+
+      <div class="result-grid">
+        <div>
+          <h3>Cypher Suggestions</h3>
+          <pre id="cypher" class="code"></pre>
+        </div>
+        <div>
+          <h3>Execution Result</h3>
+          <pre id="execution" class="code"></pre>
+        </div>
+      </div>
+
+      <div class="context">
+        <h3>Retrieved Context</h3>
+        <pre id="context" class="code"></pre>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
