@@ -587,6 +587,9 @@ class PatientCreateReq(BaseModel):
     medications: List[str] = []; allergies: List[str] = []
     clinicalSummary: str = ""
 
+class UploadReq(BaseModel):
+    patient_id: int
+
 class UploadItem(BaseModel):
     uploadId: str; fileName: str; fileSize: int; mimeType: str
     status: str; ocrText: Optional[str] = None
@@ -838,29 +841,37 @@ async def patients_create(req: PatientCreateReq):
 
 
 @app.post("/api/patients/uploads", response_model=UploadResp)
-async def upload_files(
-    doctorId: str = Form(...), patientId: str = Form(...),
+async def upload_files(req: UploadReq):
+    logger.info(f"UPLOAD: patient={req.patient_id} (no files — record only)")
+    ins = db_exec(
+        "INSERT INTO Patient_Documents (patient_id, document_type, document_name, "
+        "file_size_bytes, mime_type, ocr_status) VALUES (%s,'Upload','no_file',0,'application/octet-stream','pending')",
+        (req.patient_id,), fetch=False)
+    uid = ins.get("lastrowid", 0)
+    return UploadResp(uploads=[UploadItem(
+        uploadId=f"upl-{uid:03d}", fileName="no_file", fileSize=0,
+        mimeType="application/octet-stream", status="pending", ocrText=None)])
+
+
+@app.post("/api/patients/uploads/file", response_model=UploadResp)
+async def upload_files_with_file(
+    patient_id: int = Form(...),
     files: List[UploadFile] = File(...),
 ):
-    pid = patientId.replace("pat-", "")
-    if not pid.isdigit():
-        raise HTTPException(400, detail={"error": "Invalid patientId", "code": "BAD_REQUEST"})
-    doc_id_str = doctorId.replace("doc-", "")
-    doc_id_int = int(doc_id_str) if doc_id_str.isdigit() else None
-    logger.info(f"UPLOAD: patient={pid}, doctor={doc_id_int}, files={len(files)}")
+    logger.info(f"UPLOAD FILE: patient={patient_id}, files={len(files)}")
     items: List[UploadItem] = []
     for f in files:
         content = await f.read()
         sz = len(content)
-        logger.info(f"UPLOAD: file='{f.filename}', size={sz}, mime='{f.content_type}'")
+        logger.info(f"UPLOAD FILE: file='{f.filename}', size={sz}, mime='{f.content_type}'")
         ocr_text = perform_ocr(content, f.filename)
         ocr_status = ("completed" if ocr_text and not ocr_text.startswith("OCR ")
                       and not ocr_text.startswith("No text") else "failed")
-        logger.info(f"UPLOAD: OCR status={ocr_status}, text_len={len(ocr_text)}")
+        logger.info(f"UPLOAD FILE: OCR status={ocr_status}, text_len={len(ocr_text)}")
         ins = db_exec(
-            "INSERT INTO Patient_Documents (patient_id, doctor_id, document_type, document_name, "
-            "file_size_bytes, mime_type, ocr_text, ocr_status) VALUES (%s,%s,'Upload',%s,%s,%s,%s,%s)",
-            (int(pid), doc_id_int, f.filename, sz, f.content_type, ocr_text, ocr_status),
+            "INSERT INTO Patient_Documents (patient_id, document_type, document_name, "
+            "file_size_bytes, mime_type, ocr_text, ocr_status) VALUES (%s,'Upload',%s,%s,%s,%s,%s)",
+            (patient_id, f.filename, sz, f.content_type, ocr_text, ocr_status),
             fetch=False)
         uid = ins.get("lastrowid", 0)
         items.append(UploadItem(
@@ -868,6 +879,18 @@ async def upload_files(
             mimeType=f.content_type or "application/octet-stream",
             status=ocr_status, ocrText=ocr_text))
     return UploadResp(uploads=items)
+
+
+@app.get("/api/patients/{patient_id}/documents")
+async def get_patient_documents(patient_id: int):
+    logger.info(f"GET DOCUMENTS: patient={patient_id}")
+    res = db_exec(
+        "SELECT * FROM Patient_Documents WHERE patient_id = %s ORDER BY created_at DESC",
+        (patient_id,))
+    if not res["success"]:
+        raise HTTPException(500, detail="Failed to fetch documents")
+    logger.info(f"GET DOCUMENTS: returning {res['count']} documents for patient {patient_id}")
+    return {"patient_id": patient_id, "documents": res["results"]}
 
 
 # ===================== RAG ROUTES ===========================================
