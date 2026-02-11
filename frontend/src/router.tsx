@@ -4,6 +4,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { PatientHubPage } from '@/pages/PatientHubPage'
 import { ProcessingPage } from '@/pages/ProcessingPage'
+import { ScalingPage } from '@/pages/ScalingPage'
 
 const router = createBrowserRouter([
   {
@@ -29,6 +30,10 @@ const router = createBrowserRouter([
   {
     path: '/processing',
     element: <ProcessingPage />,
+  },
+  {
+    path: '/scaling',
+    element: <ScalingPage />,
   },
 ])
 
