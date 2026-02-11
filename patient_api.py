@@ -1,1340 +1,994 @@
 """
-FastAPI server for Patient Management API with MariaDB backend.
-Provides endpoints for doctor authentication, patient management, and document uploads.
+Kju Backend — Unified API
+==========================
+Combines:
+  • Patient Management  (login, patients CRUD, file uploads + OCR)
+  • Disease RAG          (FAISS vector search + Groq/Ollama LLM answers)
+  • JSON Transformer     (field-path & natural-language JSON transforms)
+
+Single server on port 8000.
+  Patient routes  →  /api/login, /api/patients/*
+  RAG routes      →  /api/rag/*
+  Transform routes→  /api/transform/*
+  Health          →  /, /api/health
 """
 
-import mariadb
 import os
-import logging
+import re
 import sys
+import copy
+import json
+import uuid
+import logging
+import base64
+import pickle
+import asyncio
+import mariadb
+import uvicorn
+import numpy as np
+import httpx
+from pathlib import Path
 from datetime import datetime, date
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict, Union
 from contextlib import contextmanager
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# =============================================================================
-# LOGGING CONFIGURATION - VERBOSE
-# =============================================================================
-
-# Create logger
-logger = logging.getLogger("PatientAPI")
+# ============================================================================
+# LOGGING  (verbose, single logger for the whole backend)
+# ============================================================================
+logger = logging.getLogger("KjuBackend")
 logger.setLevel(logging.DEBUG)
+_ch = logging.StreamHandler(sys.stdout)
+_ch.setFormatter(logging.Formatter(
+    "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+))
+logger.addHandler(_ch)
 
-# Create console handler with detailed formatting
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.DEBUG)
+# ============================================================================
+# SHARED CONFIG — Groq (primary) + Ollama (fallback)
+# ============================================================================
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3-32b")
 
-# Create file handler for detailed logs
-log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'patient_api.log')
-file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
-file_handler.setLevel(logging.DEBUG)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct")
 
-# Create formatters - verbose
-console_format = logging.Formatter(
-    '%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)-20s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-file_format = logging.Formatter(
-    '%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)-25s | Line:%(lineno)-4d | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logger.info(f"LLM Config — Groq model: {GROQ_MODEL} | Ollama fallback: {OLLAMA_MODEL}")
 
-console_handler.setFormatter(console_format)
-file_handler.setFormatter(file_format)
+# ============================================================================
+# DATABASE  (MariaDB)
+# ============================================================================
+DB_HOST = os.getenv("DB_HOST")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_NAME = os.getenv("DB_NAME")
+DB_PORT = int(os.getenv("DB_PORT", 3305))
 
-# Add handlers to logger
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
-
-# Also configure uvicorn logging to be verbose
-logging.getLogger("uvicorn").setLevel(logging.DEBUG)
-logging.getLogger("uvicorn.access").setLevel(logging.DEBUG)
-logging.getLogger("uvicorn.error").setLevel(logging.DEBUG)
-
-logger.info("=" * 70)
-logger.info("Patient API Server - Initializing")
-logger.info("=" * 70)
-
-# =============================================================================
-# DATABASE CONFIGURATION
-# =============================================================================
-
-DB_HOST = os.getenv('DB_HOST')
-DB_USER = os.getenv('DB_USER')
-DB_PASSWORD = os.getenv('DB_PASSWORD')
-DB_NAME = os.getenv('DB_NAME')
-DB_PORT = int(os.getenv('DB_PORT', 3305))
-
-logger.info(f"Database Config: host={DB_HOST}, port={DB_PORT}, database={DB_NAME}, user={DB_USER}")
-
-# =============================================================================
-# DATABASE CONNECTION MANAGEMENT
-# =============================================================================
 
 @contextmanager
-def get_db_connection():
-    """Context manager for database connections with verbose logging."""
+def get_db():
     conn = None
     try:
-        logger.debug(f"Opening database connection to {DB_HOST}:{DB_PORT}/{DB_NAME}")
-        conn = mariadb.connect(
-            host=DB_HOST,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            port=DB_PORT
-        )
-        logger.debug("Database connection established successfully")
+        conn = mariadb.connect(host=DB_HOST, user=DB_USER, password=DB_PASSWORD,
+                               database=DB_NAME, port=DB_PORT)
         yield conn
     except mariadb.Error as e:
-        logger.error(f"Database connection error: {e}")
-        raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
+        logger.error(f"DB connection error: {e}")
+        raise HTTPException(500, detail=f"Database error: {e}")
     finally:
         if conn:
             conn.close()
-            logger.debug("Database connection closed")
 
 
-def execute_query(query: str, params: tuple = None, fetch: bool = True) -> dict:
-    """Execute a database query with verbose logging."""
-    logger.debug(f"Executing query: {query[:200]}{'...' if len(query) > 200 else ''}")
-    if params:
-        logger.debug(f"Query parameters: {params}")
-    
-    with get_db_connection() as conn:
-        cursor = conn.cursor(dictionary=True)
+def db_exec(query: str, params: tuple = None, fetch: bool = True) -> dict:
+    """Execute a DB query. Returns dict with success + data/lastrowid."""
+    logger.debug(f"DB exec: {query[:120]}… | params={params}")
+    with get_db() as conn:
+        cur = conn.cursor(dictionary=True)
         try:
-            if params:
-                cursor.execute(query, params)
-            else:
-                cursor.execute(query)
-            
-            if fetch and query.strip().upper().startswith('SELECT'):
-                results = cursor.fetchall()
-                # Convert date/datetime objects to strings for JSON serialization
-                for row in results:
-                    for key, value in row.items():
-                        if isinstance(value, (datetime, date)):
-                            row[key] = value.isoformat()
-                logger.debug(f"Query returned {len(results)} rows")
-                return {"success": True, "data": results, "count": len(results)}
+            cur.execute(query, params or ())
+            if fetch and query.strip().upper().startswith("SELECT"):
+                rows = cur.fetchall()
+                for r in rows:
+                    for k, v in r.items():
+                        if isinstance(v, (datetime, date)):
+                            r[k] = v.isoformat()
+                logger.debug(f"DB returned {len(rows)} rows")
+                return {"success": True, "results": rows, "count": len(rows)}
             else:
                 conn.commit()
-                logger.debug(f"Query executed, {cursor.rowcount} rows affected, lastrowid={cursor.lastrowid}")
-                return {"success": True, "affected_rows": cursor.rowcount, "lastrowid": cursor.lastrowid}
-                
+                logger.debug(f"DB affected {cur.rowcount} rows, lastrowid={cur.lastrowid}")
+                return {"success": True, "affected": cur.rowcount, "lastrowid": cur.lastrowid}
         except mariadb.Error as e:
-            logger.error(f"Query execution error: {e}")
-            raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+            logger.error(f"Query error: {e}\nQuery: {query[:200]}")
+            return {"success": False, "error": str(e)}
 
 
-# =============================================================================
-# CREATE PATIENT_DOCUMENTS TABLE
-# =============================================================================
-
-def create_patient_documents_table():
-    """Create the Patient_Documents table if it doesn't exist."""
-    logger.info("Checking/Creating Patient_Documents table...")
-    
-    create_table_query = """
-    CREATE TABLE IF NOT EXISTS Patient_Documents (
-        document_id INT AUTO_INCREMENT PRIMARY KEY,
-        patient_id INT NOT NULL,
-        doctor_id INT,
-        document_type VARCHAR(100) NOT NULL COMMENT 'e.g., Lab Report, Prescription, Imaging, Clinical Notes',
-        document_name VARCHAR(255) NOT NULL,
-        file_path VARCHAR(500),
-        file_size_bytes BIGINT,
-        mime_type VARCHAR(100),
-        ocr_text LONGTEXT COMMENT 'OCR extracted text from the document',
-        ocr_status ENUM('pending', 'processing', 'completed', 'failed') DEFAULT 'pending',
-        ocr_processed_at TIMESTAMP NULL,
-        upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        notes TEXT,
-        is_verified TINYINT DEFAULT 0 COMMENT '1 if document has been verified by doctor',
-        verified_by INT COMMENT 'doctor_id who verified',
-        verified_at TIMESTAMP NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        FOREIGN KEY (patient_id) REFERENCES Patient(patient_id) ON DELETE CASCADE,
-        INDEX idx_patient (patient_id),
-        INDEX idx_doctor (doctor_id),
-        INDEX idx_document_type (document_type),
-        INDEX idx_ocr_status (ocr_status),
-        INDEX idx_upload_date (upload_date)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    """
-    
+# ============================================================================
+# SHARED LLM HELPERS  (used by RAG + JSON Transformer)
+# ============================================================================
+async def _call_groq(system_prompt: str, user_prompt: str,
+                     temperature: float = 0.3, max_tokens: int = 2000) -> Optional[str]:
+    """Call Groq chat-completions. Returns raw content string or None on failure."""
+    logger.info(f"LLM [Groq] calling model={GROQ_MODEL}, temp={temperature}")
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(create_table_query)
-            conn.commit()
-            logger.info("✅ Patient_Documents table ready")
-    except mariadb.Error as e:
-        logger.error(f"Failed to create Patient_Documents table: {e}")
-        raise
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{GROQ_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                         "Content-Type": "application/json"},
+                json={"model": GROQ_MODEL,
+                      "messages": [{"role": "system", "content": system_prompt},
+                                   {"role": "user", "content": user_prompt}],
+                      "temperature": temperature,
+                      "max_tokens": max_tokens},
+            )
+            if resp.status_code != 200:
+                logger.warning(f"LLM [Groq] HTTP {resp.status_code}: {resp.text[:300]}")
+                return None
+            content = resp.json()["choices"][0]["message"]["content"]
+            logger.info(f"LLM [Groq] success — {len(content)} chars returned")
+            return content
+    except Exception as e:
+        logger.error(f"LLM [Groq] exception: {e}")
+        return None
 
 
-# =============================================================================
-# PYDANTIC MODELS
-# =============================================================================
-
-class LoginRequest(BaseModel):
-    doctor_id: int = Field(..., description="Doctor ID for authentication")
-
-
-class LoginResponse(BaseModel):
-    success: bool
-    message: str
-    doctor_id: int
-    doctor_name: Optional[str] = None
-    specialization: Optional[str] = None
-
-
-class PatientListRequest(BaseModel):
-    limit: Optional[int] = Field(100, description="Maximum number of results")
-    offset: Optional[int] = Field(0, description="Offset for pagination")
-
-
-class PatientFilterRequest(BaseModel):
-    doctor_id: Optional[int] = Field(None, description="Filter by doctor ID")
-    name_filter: Optional[str] = Field(None, description="Filter by patient name (partial match)")
-    sex: Optional[str] = Field(None, description="Filter by sex (Male/Female/Other)")
-    min_age: Optional[int] = Field(None, description="Minimum age filter")
-    max_age: Optional[int] = Field(None, description="Maximum age filter")
-    limit: Optional[int] = Field(100, description="Maximum number of results")
-    offset: Optional[int] = Field(0, description="Offset for pagination")
+async def _call_ollama(system_prompt: str, user_prompt: str,
+                       temperature: float = 0.3, max_tokens: int = 2000) -> Optional[str]:
+    """Call Ollama generate. Returns raw content string or None on failure."""
+    logger.info(f"LLM [Ollama] calling model={OLLAMA_MODEL}, temp={temperature}")
+    full_prompt = f"{system_prompt}\n\n{user_prompt}"
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": OLLAMA_MODEL, "prompt": full_prompt,
+                      "stream": False,
+                      "options": {"temperature": temperature, "num_predict": max_tokens}},
+            )
+            if resp.status_code != 200:
+                logger.warning(f"LLM [Ollama] HTTP {resp.status_code}")
+                return None
+            content = resp.json().get("response", "")
+            logger.info(f"LLM [Ollama] success — {len(content)} chars returned")
+            return content
+    except httpx.ConnectError:
+        logger.error("LLM [Ollama] connection refused — is Ollama running?")
+        return None
+    except Exception as e:
+        logger.error(f"LLM [Ollama] exception: {e}")
+        return None
 
 
-class PatientListResponse(BaseModel):
-    success: bool
-    patients: List[dict]
-    total_count: int
+async def llm_generate(system_prompt: str, user_prompt: str, *,
+                       temperature: float = 0.3, max_tokens: int = 2000,
+                       force_ollama: bool = False) -> str:
+    """Groq-first with Ollama fallback. Always returns a string (never None)."""
+    if not force_ollama:
+        result = await _call_groq(system_prompt, user_prompt, temperature, max_tokens)
+        if result:
+            return result
+        logger.warning("LLM fallback → Ollama")
+    result = await _call_ollama(system_prompt, user_prompt, temperature, max_tokens)
+    return result or "⚠️ Both Groq and Ollama failed to generate a response."
 
 
-class PatientGetRequest(BaseModel):
-    patient_id: int = Field(..., description="Patient ID to retrieve")
+def _strip_llm_fences(text: str) -> str:
+    """Remove markdown code fences and <think> tags from LLM output."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
 
 
-class PatientGetResponse(BaseModel):
-    success: bool
-    patient: Optional[dict] = None
-    message: Optional[str] = None
-
-
-class PatientCreateRequest(BaseModel):
-    name: str = Field(..., description="Full name of the patient")
-    dob: Optional[str] = Field(None, description="Date of birth (YYYY-MM-DD)")
-    sex: Optional[str] = Field(None, description="Sex (Male/Female/Other)")
-    doctor_id: Optional[int] = Field(None, description="Assigned doctor ID")
-
-
-class PatientCreateResponse(BaseModel):
-    success: bool
-    message: str
-    patient_id: Optional[int] = None
-
-
-class DocumentUploadResponse(BaseModel):
-    success: bool
-    message: str
-    document_id: Optional[int] = None
-    ocr_result: Optional[str] = None
-
-
-class DocumentListRequest(BaseModel):
-    patient_id: int = Field(..., description="Patient ID to retrieve documents for")
-    document_type: Optional[str] = Field(None, description="Filter by document type")
-    limit: Optional[int] = Field(100, description="Maximum number of results")
-    offset: Optional[int] = Field(0, description="Offset for pagination")
-
-
-class DocumentListResponse(BaseModel):
-    success: bool
-    documents: List[dict]
-    total_count: int
-    patient_id: int
-
-
-class DocumentGetRequest(BaseModel):
-    document_id: int = Field(..., description="Document ID to retrieve")
-
-
-class DocumentGetResponse(BaseModel):
-    success: bool
-    document: Optional[dict] = None
-    message: Optional[str] = None
-
-
-# =============================================================================
-# OCR FUNCTIONS (Mistral API)
-# =============================================================================
-
+# ============================================================================
+# OCR  (Mistral)
+# ============================================================================
 def _extract_text_from_ocr_response(ocr_response) -> str:
-    """
-    Normalize different possible OCR response shapes to plain text.
-    Supports SDK pydantic model objects or raw dict replies.
-    """
     if ocr_response is None:
         return ""
-    
-    # If pydantic model, prefer model_dump() if available
     data = None
     if hasattr(ocr_response, "model_dump"):
         try:
             data = ocr_response.model_dump()
         except Exception:
             data = None
-
     pages = []
-    # Priority: direct attribute .pages
     if hasattr(ocr_response, "pages") and ocr_response.pages is not None:
         pages = ocr_response.pages
     elif isinstance(data, dict) and isinstance(data.get("pages"), list):
-        pages = data.get("pages")
+        pages = data["pages"]
     elif isinstance(ocr_response, dict) and isinstance(ocr_response.get("pages"), list):
-        pages = ocr_response.get("pages")
-
+        pages = ocr_response["pages"]
     segments = []
     for p in pages:
         if p is None:
             continue
         if isinstance(p, dict):
             seg = p.get("markdown") or p.get("text") or ""
-        else:  # object with attributes
+        else:
             seg = getattr(p, "markdown", None) or getattr(p, "text", "")
         if seg:
             segments.append(seg.strip())
-    
     return "\n\n".join(segments)
 
 
 def perform_ocr(file_content: bytes, filename: str) -> str:
-    """
-    Perform OCR on uploaded file using Mistral AI OCR API.
-    Supports images (JPEG, PNG) and PDF files.
-    
-    Args:
-        file_content: The binary content of the uploaded file
-        filename: The name of the uploaded file
-        
-    Returns:
-        str: Extracted text from the document
-    """
-    import base64
-    from mistralai import Mistral
-    
-    logger.info(f"OCR processing file: {filename}, size: {len(file_content)} bytes")
-    
-    # Get Mistral API key
-    mistral_api_key = os.getenv("MISTRAL_API_KEY")
-    if not mistral_api_key or mistral_api_key == "your_mistral_api_key_here":
-        logger.warning("MISTRAL_API_KEY not configured - returning placeholder")
-        return "OCR not configured - please set MISTRAL_API_KEY in .env"
-    
+    logger.info(f"OCR: Starting for file '{filename}' ({len(file_content)} bytes)")
     try:
-        client = Mistral(api_key=mistral_api_key)
-        base64_content = base64.b64encode(file_content).decode('utf-8')
-        
-        # Determine file type based on extension
-        filename_lower = filename.lower() if filename else ""
-        
-        if filename_lower.endswith('.pdf'):
-            # PDF document
-            logger.debug("Processing as PDF document")
-            ocr_response = client.ocr.process(
-                model="mistral-ocr-latest",
-                document={
-                    "type": "document_url",
-                    "document_url": f"data:application/pdf;base64,{base64_content}"
-                },
-                include_image_base64=False
-            )
+        from mistralai import Mistral
+    except ImportError:
+        logger.error("OCR: mistralai package not installed")
+        return "OCR error: mistralai package not installed"
+    mistral_key = os.getenv("MISTRAL_API_KEY")
+    if not mistral_key or mistral_key == "your_mistral_api_key_here":
+        logger.error("OCR: MISTRAL_API_KEY not configured")
+        return "OCR not configured"
+    try:
+        client = Mistral(api_key=mistral_key)
+        b64 = base64.b64encode(file_content).decode("utf-8")
+        fl = (filename or "").lower()
+        if fl.endswith(".pdf"):
+            logger.info("OCR: Processing as PDF document")
+            resp = client.ocr.process(model="mistral-ocr-latest",
+                                      document={"type": "document_url",
+                                                 "document_url": f"data:application/pdf;base64,{b64}"},
+                                      include_image_base64=False)
         else:
-            # Image file (JPEG, PNG, etc.)
-            # Determine MIME type
-            if filename_lower.endswith('.png'):
-                mime_type = "image/png"
-            elif filename_lower.endswith('.gif'):
-                mime_type = "image/gif"
-            elif filename_lower.endswith('.webp'):
-                mime_type = "image/webp"
-            else:
-                mime_type = "image/jpeg"  # Default to JPEG
-            
-            logger.debug(f"Processing as image with MIME type: {mime_type}")
-            ocr_response = client.ocr.process(
-                model="mistral-ocr-latest",
-                document={
-                    "type": "image_url",
-                    "image_url": f"data:{mime_type};base64,{base64_content}"
-                },
-                include_image_base64=False
-            )
-        
-        # Extract text from response
-        extracted_text = _extract_text_from_ocr_response(ocr_response)
-        
-        if extracted_text:
-            logger.info(f"OCR completed successfully, extracted {len(extracted_text)} characters")
-            return extracted_text
-        else:
-            logger.warning("OCR completed but no text was extracted")
-            return "No text could be extracted from the document"
-            
+            mime = "image/png" if fl.endswith(".png") else "image/jpeg"
+            logger.info(f"OCR: Processing as image ({mime})")
+            resp = client.ocr.process(model="mistral-ocr-latest",
+                                      document={"type": "image_url",
+                                                 "image_url": f"data:{mime};base64,{b64}"},
+                                      include_image_base64=False)
+        logger.debug(f"OCR: Raw response type: {type(resp).__name__}")
+        if hasattr(resp, "model_dump"):
+            logger.debug(f"OCR: Response dump: {json.dumps(resp.model_dump(), default=str)[:500]}")
+        text = _extract_text_from_ocr_response(resp) or "No text extracted"
+        logger.info(f"OCR: Extracted {len(text)} chars from '{filename}'")
+        return text
     except Exception as e:
-        logger.error(f"OCR processing failed: {str(e)}")
-        return f"OCR processing failed: {str(e)}"
+        logger.error(f"OCR: Failed for '{filename}': {e}", exc_info=True)
+        return f"OCR failed: {e}"
 
 
-# =============================================================================
-# FASTAPI APPLICATION
-# =============================================================================
+# ============================================================================
+# DISEASE RAG — Vector DB  (lazy-loaded FAISS)
+# ============================================================================
+VECTOR_DB_PATH = Path(__file__).parent / "DiseaseRag" / "disease_vector_db"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-app = FastAPI(
-    title="Patient Management API",
-    description="API for managing patients, authentication, and clinical document uploads",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
+# Lazy imports
+_faiss = None
+_SentenceTransformer = None
 
-# Enable CORS for network access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+def _load_heavy_imports():
+    global _faiss, _SentenceTransformer
+    if _faiss is None:
+        logger.info("RAG: Lazy-loading faiss…")
+        import faiss as _f
+        _faiss = _f
+    if _SentenceTransformer is None:
+        logger.info("RAG: Lazy-loading SentenceTransformer…")
+        from sentence_transformers import SentenceTransformer as _ST
+        _SentenceTransformer = _ST
+
+
+class DiseaseVectorDB:
+    """FAISS-backed vector database for disease documents."""
+
+    def __init__(self):
+        self.index = None
+        self.metadata = None
+        self.embeddings = None
+        self.model = None
+        self.is_loaded = False
+
+    def load(self):
+        if self.is_loaded:
+            return
+        _load_heavy_imports()
+        logger.info(f"RAG: Loading vector DB from {VECTOR_DB_PATH}")
+        index_path = VECTOR_DB_PATH / "faiss_index.bin"
+        if not index_path.exists():
+            raise FileNotFoundError(f"Vector DB not found at {VECTOR_DB_PATH}")
+        self.index = _faiss.read_index(str(index_path))
+        with open(VECTOR_DB_PATH / "metadata.pkl", "rb") as f:
+            self.metadata = pickle.load(f)
+        self.embeddings = np.load(VECTOR_DB_PATH / "embeddings.npy")
+        logger.info(f"RAG: Loading embedding model: {EMBEDDING_MODEL}")
+        self.model = _SentenceTransformer(EMBEDDING_MODEL)
+        self.is_loaded = True
+        logger.info(f"RAG: Vector DB ready — {len(self.metadata)} documents")
+
+    def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        if not self.is_loaded:
+            self.load()
+        logger.debug(f"RAG search: query='{query[:80]}…', top_k={top_k}")
+        qe = self.model.encode([query], convert_to_numpy=True)
+        distances, indices = self.index.search(qe.astype("float32"), top_k)
+        results = []
+        for i, (dist, idx) in enumerate(zip(distances[0], indices[0])):
+            if idx < len(self.metadata):
+                doc = self.metadata[idx]
+                similarity = max(0, 100 * (1 - dist / 4))
+                results.append({"rank": i + 1, "index": int(idx),
+                                "similarity": round(similarity, 2), "document": doc})
+        logger.debug(f"RAG search returned {len(results)} results")
+        return results
+
+    def get_document_by_id(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        if not self.is_loaded:
+            self.load()
+        for idx, doc in enumerate(self.metadata):
+            if doc.get("id") == doc_id:
+                return {"index": idx, "document": doc}
+        return None
+
+    @property
+    def total_documents(self) -> int:
+        return len(self.metadata) if self.is_loaded else 0
+
+
+vector_db = DiseaseVectorDB()
+
+
+# ---- RAG helper formatters ----
+def _fmt(doc, key):
+    v = doc.get(key, [])
+    if not v:
+        return ""
+    if isinstance(v, list):
+        return f"{key.replace('_',' ').title()}: " + ", ".join(
+            s for s in v if s and not s.startswith("---"))[:500]
+    return f"{key.replace('_',' ').title()}: {v}"[:500]
+
+
+async def _rag_generate_answer(query: str, context_docs: List[Dict]) -> str:
+    """Build context from vector search results and call LLM."""
+    parts = []
+    for i, result in enumerate(context_docs, 1):
+        doc = result["document"]
+        parts.append(f"""
+--- Document {i}: {doc.get('name','Unknown')} ---
+ID: {doc.get('id','N/A')}
+Source: {doc.get('source','Disease Ontology Database')}
+Description: {doc.get('description','N/A')}
+{_fmt(doc,'symptoms')}
+{_fmt(doc,'treatments')}
+{_fmt(doc,'diagnostics')}
+{_fmt(doc,'risk_factors')}
+""")
+    context = "\n".join(parts)
+    system = (
+        "You are a medical information assistant. Provide accurate answers based ONLY on the "
+        "provided context documents. Cite sources as [Document X]. If the context is insufficient, "
+        "say so. This is informational only, not medical advice."
+    )
+    user = f"QUESTION: {query}\n\nCONTEXT DOCUMENTS:\n{context}\n\nProvide a comprehensive answer with citations."
+    return await llm_generate(system, user)
+
+
+# ============================================================================
+# JSON TRANSFORMER — helpers
+# ============================================================================
+def get_nested_value(data: dict, path: str) -> Any:
+    keys = path.split(".")
+    current = data
+    for key in keys:
+        if isinstance(current, dict):
+            if key not in current:
+                raise KeyError(f"Key '{key}' not found in path '{path}'")
+            current = current[key]
+        elif isinstance(current, list):
+            idx = int(key)
+            if idx < 0 or idx >= len(current):
+                raise IndexError(f"Index {idx} out of range for path '{path}'")
+            current = current[idx]
+        else:
+            raise TypeError(f"Cannot navigate into {type(current).__name__} at '{path}'")
+    return current
+
+
+def set_nested_value(data: dict, path: str, value: Any) -> Any:
+    keys = path.split(".")
+    current = data
+    for key in keys[:-1]:
+        if isinstance(current, dict):
+            current = current[key]
+        elif isinstance(current, list):
+            current = current[int(key)]
+        else:
+            raise TypeError(f"Cannot navigate at '{path}'")
+    final = keys[-1]
+    if isinstance(current, dict):
+        old = current[final]
+        current[final] = value
+        return old
+    elif isinstance(current, list):
+        idx = int(final)
+        old = current[idx]
+        current[idx] = value
+        return old
+    raise TypeError(f"Cannot set at '{path}'")
+
+
+def apply_transformations(data: dict, instructions) -> tuple:
+    result = copy.deepcopy(data)
+    changes = []
+    for t in instructions.transformations:
+        try:
+            old = set_nested_value(result, t.field_path, t.new_value)
+            changes.append(f"{t.field_path}: {old} -> {t.new_value}")
+        except (KeyError, IndexError, ValueError, TypeError) as e:
+            raise HTTPException(400, detail=f"Transform failed at '{t.field_path}': {e}")
+    return result, changes
+
+
+def compute_changes(original: dict, transformed: dict, prefix: str = "") -> List[str]:
+    changes = []
+    for key in original:
+        cp = f"{prefix}{key}" if prefix else key
+        if key not in transformed:
+            continue
+        ov, nv = original[key], transformed[key]
+        if isinstance(ov, dict) and isinstance(nv, dict):
+            changes.extend(compute_changes(ov, nv, f"{cp}."))
+        elif isinstance(ov, list) and isinstance(nv, list):
+            for i, (a, b) in enumerate(zip(ov, nv)):
+                if isinstance(a, dict) and isinstance(b, dict):
+                    changes.extend(compute_changes(a, b, f"{cp}.{i}."))
+                elif a != b:
+                    changes.append(f"{cp}.{i}: {a} -> {b}")
+        elif ov != nv:
+            changes.append(f"{cp}: {ov} -> {nv}")
+    return changes
+
+
+def _json_transform_prompts(original: dict, instructions: str):
+    system = """You are a JSON transformation assistant. Modify JSON per instructions.
+RULES: preserve structure, only change values mentioned, return ONLY raw JSON (no markdown/code fences).
+TEMPERATURE: tempc is Celsius (30-45). If value >45, convert from Fahrenheit: C=(F-32)*5/9.
+RELATIVE: "increase by X"=add X, "decrease by X"=subtract X, "set to X"=replace."""
+    user = f"Original JSON:\n{json.dumps(original, indent=2)}\n\nInstructions: {instructions}\n\nReturn modified JSON:"
+    return system, user
+
+
+async def _transform_with_llm(original: dict, instructions: str, force_ollama: bool = False):
+    """Use LLM for NL JSON transform. Returns (dict|None, model_name)."""
+    system, user = _json_transform_prompts(original, instructions)
+    raw = await llm_generate(system, user, temperature=0.1, force_ollama=force_ollama)
+    if raw.startswith("⚠️"):
+        return None, raw
+    cleaned = _strip_llm_fences(raw)
+    try:
+        return json.loads(cleaned), (OLLAMA_MODEL if force_ollama else GROQ_MODEL)
+    except json.JSONDecodeError as e:
+        logger.error(f"Transform LLM JSON parse error: {e}\nRaw: {cleaned[:500]}")
+        return None, f"JSON parse error: {e}"
+
+
+# ============================================================================
+# DB INITIALISATION
+# ============================================================================
+def init_db():
+    """Create helper tables if missing."""
+    ddl = [
+        """CREATE TABLE IF NOT EXISTS Patient_Documents (
+            document_id INT AUTO_INCREMENT PRIMARY KEY,
+            patient_id INT NOT NULL,
+            doctor_id INT,
+            document_type VARCHAR(100) NOT NULL,
+            document_name VARCHAR(255) NOT NULL,
+            file_size_bytes BIGINT,
+            mime_type VARCHAR(100),
+            ocr_text LONGTEXT,
+            ocr_status VARCHAR(20) DEFAULT 'pending',
+            upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+        """CREATE TABLE IF NOT EXISTS Diagnostic_Jobs (
+            job_id VARCHAR(50) PRIMARY KEY,
+            patient_id INT NOT NULL,
+            doctor_id VARCHAR(50),
+            observations TEXT,
+            status VARCHAR(20) DEFAULT 'queued',
+            current_step VARCHAR(200) DEFAULT 'Queued',
+            progress INT DEFAULT 0,
+            report_data LONGTEXT,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP NULL,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
+    ]
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            for q in ddl:
+                cur.execute(q)
+            conn.commit()
+        logger.info("DB tables verified.")
+    except Exception as e:
+        logger.warning(f"DB init warning: {e}")
+
+
+# ============================================================================
+# PYDANTIC SCHEMAS — Patient
+# ============================================================================
+
+class LoginRequest(BaseModel):
+    doctorId: Optional[str] = None
+    medicalLicenseId: Optional[str] = None
+
+class DoctorProfile(BaseModel):
+    id: str
+    name: str
+    specialty: str
+    medicalLicenseId: str
+
+class LoginResponse(BaseModel):
+    success: bool
+    doctor: DoctorProfile
+
+class PatientListReq(BaseModel):
+    doctorId: str
+    filter: Optional[str] = "all"
+    search: Optional[str] = ""
+
+class PatientListItem(BaseModel):
+    id: str; name: str; age: int; sex: str
+    avatar: Optional[str] = None; symptom: str; riskLevel: str
+
+class PatientListResp(BaseModel):
+    patients: List[PatientListItem]
+
+class PatientGetReq(BaseModel):
+    doctorId: str; patientId: str
+
+class Vitals(BaseModel):
+    heartRate: int; bloodPressure: str; oxygenSaturation: int
+
+class LabResults(BaseModel):
+    glucose: int; cholesterol: int; creatinine: float
+
+class RiskPoint(BaseModel):
+    date: str; score: int
+
+class PatientFull(BaseModel):
+    id: str; name: str; age: int; sex: str
+    avatar: Optional[str] = None; symptom: str
+    bloodType: Optional[str] = None; primaryCondition: Optional[str] = None
+    vitals: Vitals; labResults: LabResults
+    riskLevel: str; riskPercentage: int; riskHistory: List[RiskPoint]
+    medications: List[str]; allergies: List[str]
+    clinicalSummary: str; lastVisit: Optional[str] = None
+
+class PatientCreateReq(BaseModel):
+    doctorId: str; name: str; age: int; sex: str
+    bloodType: Optional[str] = None; primaryCondition: Optional[str] = None
+    symptom: str; vitals: Vitals; labResults: LabResults
+    medications: List[str] = []; allergies: List[str] = []
+    clinicalSummary: str = ""
+
+class UploadItem(BaseModel):
+    uploadId: str; fileName: str; fileSize: int; mimeType: str
+    status: str; ocrText: Optional[str] = None
+
+class UploadResp(BaseModel):
+    uploads: List[UploadItem]
+
+
+# ============================================================================
+# PYDANTIC SCHEMAS — RAG
+# ============================================================================
+
+class RagCitation(BaseModel):
+    id: str; name: str; source: str; relevance_score: float; excerpt: str
+
+class RagQueryRequest(BaseModel):
+    query: str
+
+class RagResponse(BaseModel):
+    answer: str
+    citations: List[RagCitation]
+
+
+# ============================================================================
+# PYDANTIC SCHEMAS — JSON Transformer
+# ============================================================================
+
+class FieldTransformation(BaseModel):
+    field_path: str; new_value: Any
+
+class TransformationInstruction(BaseModel):
+    transformations: List[FieldTransformation] = []
+
+class TxObservation(BaseModel):
+    heartrate: float = Field(..., ge=0, le=300)
+    sysbp: float = Field(..., ge=0, le=300)
+    diasbp: float = Field(..., ge=0, le=200)
+    meanbp: float = Field(..., ge=0, le=250)
+    resprate: float = Field(..., ge=0, le=100)
+    tempc: float = Field(..., ge=30, le=45)
+    spo2: float = Field(..., ge=0, le=100)
+    glucose: float = Field(..., ge=0, le=1000)
+    age: float = Field(..., ge=0, le=150)
+    gender: int = Field(..., ge=0, le=1)
+
+class TxPatientData(BaseModel):
+    patient_id: str
+    observations: List[TxObservation] = Field(..., min_length=1)
+
+class TransformRequest(BaseModel):
+    original_data: TxPatientData
+    instructions: TransformationInstruction
+
+class TransformResponse(BaseModel):
+    success: bool; transformed_data: Dict[str, Any]
+    changes_applied: List[str] = []; timestamp: str
+    model_used: Optional[str] = None
+
+class NLTransformRequest(BaseModel):
+    original_data: TxPatientData
+    instructions: str
+    use_ollama: bool = False
+
+
+# ============================================================================
+# PATIENT HELPERS
+# ============================================================================
+def _risk(row) -> tuple:
+    d = float(row.get("diabetes_risk_score") or 0)
+    c = float(row.get("cardiovascular_risk_score") or 0)
+    mx = max(d, c); pct = int(mx * 100)
+    if mx > 0.7: return "critical", pct
+    elif mx > 0.3: return "watch", pct
+    return "low", pct
+
+def _sex(row) -> str:
+    g = str(row.get("gender") or "M").strip().upper()
+    return "M" if g.startswith("M") else "F"
+
+def _symptom(row) -> str:
+    s = row.get("latest_encounter_reason") or ""
+    if not s and row.get("active_conditions_list"):
+        parts = str(row["active_conditions_list"]).split(",")
+        s = parts[0].strip() if parts else ""
+    return s[:120] or "Routine checkup"
+
+def _split(val) -> List[str]:
+    if not val: return []
+    return [x.strip() for x in str(val).split(",") if x.strip()]
+
+
+# ============================================================================
+# FASTAPI APP
+# ============================================================================
+app = FastAPI(title="Kju Unified Backend", version="3.0.0",
+              description="Patient Management + Disease RAG + JSON Transformer",
+              docs_url="/docs", redoc_url="/redoc")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
 
 
 @app.on_event("startup")
-async def startup_event():
-    """Initialize database tables on startup."""
-    logger.info("=" * 70)
-    logger.info("FastAPI Application Starting")
-    logger.info("=" * 70)
-    
+async def _startup():
+    logger.info("=== Kju Unified Backend starting ===")
+    init_db()
+    # Pre-load vector DB (non-blocking — log warning if missing)
     try:
-        create_patient_documents_table()
-        logger.info("✅ Database initialization complete")
+        vector_db.load()
     except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}")
-        raise
+        logger.warning(f"RAG vector DB not loaded on startup (will lazy-load): {e}")
+    logger.info("=== Startup complete ===")
 
 
-# =============================================================================
-# API ENDPOINTS
-# =============================================================================
+# ===================== PATIENT ROUTES =======================================
+
+@app.post("/api/login", response_model=LoginResponse)
+async def login(req: LoginRequest):
+    logger.info(f"LOGIN: doctorId={req.doctorId}, licenseId={req.medicalLicenseId}")
+    if req.doctorId:
+        did = req.doctorId.replace("doc-", "")
+        if did.isdigit():
+            r = db_exec("SELECT doctor_id, first_name, last_name, specialization, license_number "
+                        "FROM Doctor WHERE doctor_id = %s", (int(did),))
+        else:
+            r = db_exec("SELECT doctor_id, first_name, last_name, specialization, license_number "
+                        "FROM Doctor WHERE license_number = %s", (did,))
+    elif req.medicalLicenseId:
+        r = db_exec("SELECT doctor_id, first_name, last_name, specialization, license_number "
+                    "FROM Doctor WHERE license_number = %s", (req.medicalLicenseId,))
+    else:
+        raise HTTPException(400, detail={"error": "Provide doctorId or medicalLicenseId", "code": "BAD_REQUEST"})
+
+    if r["success"] and r["count"] > 0:
+        d = r["results"][0]
+        logger.info(f"LOGIN: success for doctor_id={d['doctor_id']}")
+        return LoginResponse(
+            success=True,
+            doctor=DoctorProfile(
+                id=f"doc-{d['doctor_id']}",
+                name=f"Dr. {d['first_name']} {d['last_name']}",
+                specialty=d["specialization"] or "General Practice",
+                medicalLicenseId=d["license_number"],
+            ),
+        )
+    logger.warning("LOGIN: doctor not found")
+    raise HTTPException(401, detail={"error": "Doctor not found", "code": "AUTH_FAILED"})
+
+
+@app.post("/api/patients/list", response_model=PatientListResp)
+async def patients_list(req: PatientListReq):
+    logger.info(f"PATIENTS LIST: doctor={req.doctorId}, filter={req.filter}, search='{req.search}'")
+    where = "WHERE 1=1"
+    params: list = []
+    if req.search:
+        where += " AND (full_name LIKE %s OR CAST(patient_data_id AS CHAR) LIKE %s)"
+        params += [f"%{req.search}%", f"%{req.search}%"]
+    if req.filter == "critical":
+        where += " AND (cardiovascular_risk_score > 0.7 OR diabetes_risk_score > 0.7)"
+    elif req.filter == "watch":
+        where += (" AND ((cardiovascular_risk_score > 0.3 AND cardiovascular_risk_score <= 0.7) "
+                   "OR (diabetes_risk_score > 0.3 AND diabetes_risk_score <= 0.7))")
+    elif req.filter == "low":
+        where += " AND cardiovascular_risk_score <= 0.3 AND diabetes_risk_score <= 0.3"
+    q = f"SELECT * FROM Patient_Data {where} ORDER BY patient_data_id LIMIT 50"
+    res = db_exec(q, tuple(params) if params else None)
+    pts: List[PatientListItem] = []
+    if res["success"]:
+        for row in res["results"]:
+            rl, _ = _risk(row)
+            pts.append(PatientListItem(
+                id=f"pat-{row['patient_data_id']}", name=row["full_name"] or "Unknown",
+                age=row.get("age_years") or 0, sex=_sex(row), avatar=None,
+                symptom=_symptom(row), riskLevel=rl))
+    logger.info(f"PATIENTS LIST: returning {len(pts)} patients")
+    return PatientListResp(patients=pts)
+
+
+@app.post("/api/patients/get", response_model=PatientFull)
+async def patients_get(req: PatientGetReq):
+    pid = req.patientId.replace("pat-", "")
+    logger.info(f"PATIENT GET: id={pid}")
+    if not pid.isdigit():
+        raise HTTPException(404, detail={"error": "Patient not found", "code": "PATIENT_NOT_FOUND"})
+    res = db_exec("SELECT * FROM Patient_Data WHERE patient_data_id = %s", (int(pid),))
+    if not res["success"] or res["count"] == 0:
+        raise HTTPException(404, detail={"error": "Patient not found", "code": "PATIENT_NOT_FOUND"})
+    p = res["results"][0]
+    rl, rpct = _risk(p)
+    hist_res = db_exec(
+        "SELECT risk_score, assessed_at FROM AI_Risk_Assessment "
+        "WHERE synthea_patient_id = %s ORDER BY assessed_at DESC LIMIT 10",
+        (p.get("synthea_id") or "",))
+    history: List[RiskPoint] = []
+    if hist_res["success"]:
+        for h in hist_res["results"]:
+            try:
+                dt = h["assessed_at"][:10] if isinstance(h["assessed_at"], str) else str(h["assessed_at"])[:10]
+                sc = int(float(h["risk_score"] or 0) * 100)
+                history.append(RiskPoint(date=dt, score=sc))
+            except Exception:
+                pass
+    vitals = Vitals(heartRate=p.get("heart_rate") or 78,
+                    bloodPressure=f"{p.get('bp_systolic') or 120}/{p.get('bp_diastolic') or 80}",
+                    oxygenSaturation=int(float(p.get("oxygen_saturation") or 98)))
+    labs = LabResults(glucose=p.get("glucose_fasting") or p.get("glucose") or 100,
+                      cholesterol=p.get("cholesterol_total") or 200,
+                      creatinine=float(p.get("creatinine") or 1.0))
+    first_cond = ""
+    if p.get("active_conditions_list"):
+        first_cond = str(p["active_conditions_list"]).split(",")[0].strip()
+    last_visit = None
+    if p.get("latest_encounter_date"):
+        lv = p["latest_encounter_date"]
+        last_visit = lv[:10] if isinstance(lv, str) else str(lv)[:10]
+    logger.info(f"PATIENT GET: returning patient {pid}, risk={rl}")
+    return PatientFull(
+        id=f"pat-{p['patient_data_id']}", name=p["full_name"] or "Unknown",
+        age=p.get("age_years") or 0, sex=_sex(p), avatar=None, symptom=_symptom(p),
+        bloodType=None, primaryCondition=first_cond or None, vitals=vitals, labResults=labs,
+        riskLevel=rl, riskPercentage=rpct, riskHistory=history,
+        medications=_split(p.get("active_medications_list")),
+        allergies=_split(p.get("active_allergies_list")),
+        clinicalSummary=(p.get("all_observations_list") or "No clinical summary available.")[:800],
+        lastVisit=last_visit)
+
+
+@app.post("/api/patients/create", response_model=PatientFull, status_code=201)
+async def patients_create(req: PatientCreateReq):
+    logger.info(f"PATIENT CREATE: name={req.name}, age={req.age}")
+    gender = "Male" if req.sex.upper().startswith("M") else "Female"
+    new_synthea_id = f"NEW-{uuid.uuid4().hex[:12]}"
+    ins = db_exec(
+        "INSERT INTO Patient_Data (synthea_id, full_name, age_years, gender, latest_encounter_reason, "
+        "active_conditions_list, active_medications_list, active_allergies_list) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (new_synthea_id, req.name, req.age, gender, req.symptom,
+         req.primaryCondition or "", ", ".join(req.medications), ", ".join(req.allergies)),
+        fetch=False)
+    if not ins["success"]:
+        raise HTTPException(500, detail={"error": "Failed to create patient", "code": "DB_ERROR"})
+    new_id = ins["lastrowid"]
+    logger.info(f"PATIENT CREATE: success, new id={new_id}")
+    return PatientFull(
+        id=f"pat-{new_id}", name=req.name, age=req.age, sex=req.sex, avatar=None,
+        symptom=req.symptom, bloodType=req.bloodType, primaryCondition=req.primaryCondition,
+        vitals=req.vitals, labResults=req.labResults, riskLevel="low", riskPercentage=0,
+        riskHistory=[], medications=req.medications, allergies=req.allergies,
+        clinicalSummary=req.clinicalSummary, lastVisit=None)
+
+
+@app.post("/api/patients/uploads", response_model=UploadResp)
+async def upload_files(
+    doctorId: str = Form(...), patientId: str = Form(...),
+    files: List[UploadFile] = File(...),
+):
+    pid = patientId.replace("pat-", "")
+    if not pid.isdigit():
+        raise HTTPException(400, detail={"error": "Invalid patientId", "code": "BAD_REQUEST"})
+    doc_id_str = doctorId.replace("doc-", "")
+    doc_id_int = int(doc_id_str) if doc_id_str.isdigit() else None
+    logger.info(f"UPLOAD: patient={pid}, doctor={doc_id_int}, files={len(files)}")
+    items: List[UploadItem] = []
+    for f in files:
+        content = await f.read()
+        sz = len(content)
+        logger.info(f"UPLOAD: file='{f.filename}', size={sz}, mime='{f.content_type}'")
+        ocr_text = perform_ocr(content, f.filename)
+        ocr_status = ("completed" if ocr_text and not ocr_text.startswith("OCR ")
+                      and not ocr_text.startswith("No text") else "failed")
+        logger.info(f"UPLOAD: OCR status={ocr_status}, text_len={len(ocr_text)}")
+        ins = db_exec(
+            "INSERT INTO Patient_Documents (patient_id, doctor_id, document_type, document_name, "
+            "file_size_bytes, mime_type, ocr_text, ocr_status) VALUES (%s,%s,'Upload',%s,%s,%s,%s,%s)",
+            (int(pid), doc_id_int, f.filename, sz, f.content_type, ocr_text, ocr_status),
+            fetch=False)
+        uid = ins.get("lastrowid", 0)
+        items.append(UploadItem(
+            uploadId=f"upl-{uid:03d}", fileName=f.filename, fileSize=sz,
+            mimeType=f.content_type or "application/octet-stream",
+            status=ocr_status, ocrText=ocr_text))
+    return UploadResp(uploads=items)
+
+
+# ===================== RAG ROUTES ===========================================
+
+@app.post("/api/rag/query", response_model=RagResponse)
+async def rag_query(req: RagQueryRequest):
+    logger.info(f"RAG QUERY: '{req.query[:80]}…'")
+    if not vector_db.is_loaded:
+        try:
+            vector_db.load()
+        except Exception as e:
+            raise HTTPException(500, detail=f"Failed to load vector DB: {e}")
+    results = vector_db.search(req.query, 5)
+    if not results:
+        raise HTTPException(404, detail="No relevant documents found")
+    citations = []
+    for r in results:
+        doc = r["document"]
+        excerpt = doc.get("description", doc.get("text", ""))[:300]
+        if len(doc.get("description", doc.get("text", ""))) > 300:
+            excerpt += "..."
+        citations.append(RagCitation(
+            id=doc.get("id", f"IDX:{r['index']}"),
+            name=doc.get("name", "Unknown"),
+            source=doc.get("source", "Disease Ontology DB"),
+            relevance_score=r["similarity"], excerpt=excerpt))
+    answer = await _rag_generate_answer(req.query, results)
+    logger.info(f"RAG QUERY: returning {len(citations)} citations")
+    return RagResponse(answer=answer, citations=citations)
+
+
+# ===================== TRANSFORM ROUTES =====================================
+
+@app.post("/api/transform", response_model=TransformResponse)
+async def transform_patient_data(request: TransformRequest):
+    logger.info(f"TRANSFORM: {len(request.instructions.transformations)} field transforms")
+    data_dict = request.original_data.model_dump()
+    transformed, changes = apply_transformations(data_dict, request.instructions)
+    try:
+        validated = TxPatientData(**transformed)
+    except Exception as e:
+        raise HTTPException(400, detail=f"Transformed data invalid: {e}")
+    logger.info(f"TRANSFORM: {len(changes)} changes applied")
+    return TransformResponse(success=True, transformed_data=validated.model_dump(),
+                             changes_applied=changes, timestamp=datetime.now().isoformat())
+
+
+@app.post("/api/transform/nl", response_model=TransformResponse)
+async def transform_nl(request: NLTransformRequest):
+    logger.info(f"TRANSFORM NL: instructions='{request.instructions[:80]}…'")
+    data_dict = request.original_data.model_dump()
+    transformed, model_used = await _transform_with_llm(data_dict, request.instructions,
+                                                        force_ollama=request.use_ollama)
+    if transformed is None:
+        raise HTTPException(500, detail=f"LLM failed: {model_used}")
+    try:
+        validated = TxPatientData(**transformed)
+    except Exception as e:
+        raise HTTPException(400, detail=f"LLM output invalid: {e}")
+    changes = compute_changes(data_dict, validated.model_dump())
+    logger.info(f"TRANSFORM NL: {len(changes)} changes via {model_used}")
+    return TransformResponse(success=True, transformed_data=validated.model_dump(),
+                             changes_applied=changes, timestamp=datetime.now().isoformat(),
+                             model_used=model_used)
+
+
+# ===================== HEALTH / ROOT ========================================
 
 @app.get("/")
 async def root():
-    """Root endpoint - API health check."""
-    logger.debug("Root endpoint accessed")
-    return {"status": "ok", "message": "Patient Management API is running"}
+    return {
+        "status": "ok",
+        "service": "Kju Unified Backend",
+        "version": "3.0.0",
+        "modules": {
+            "patients": "/api/patients/*",
+            "rag": "/api/rag/*",
+            "transform": "/api/transform/*",
+        },
+        "docs": "/docs",
+    }
 
 
 @app.get("/api/health")
-async def health_check():
-    """Health check endpoint."""
-    logger.debug("Health check endpoint accessed")
+async def health():
+    db_ok = False
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-        return {"status": "healthy", "database": "connected"}
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
-
-
-# -----------------------------------------------------------------------------
-# AUTHENTICATION
-# -----------------------------------------------------------------------------
-
-@app.post("/api/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
-    """
-    Doctor authentication endpoint.
-    Authenticates doctor by doctor_id only (no password required).
-    
-    **Request Format:** JSON
-    
-    **Content-Type:** application/json
-    
-    **Request Body:**
-    ```json
-    {
-        "doctor_id": 1  // Required: Integer - The doctor's ID
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        db_ok = True
+    except Exception:
+        pass
+    return {
+        "status": "healthy" if db_ok else "degraded",
+        "database": "connected" if db_ok else "disconnected",
+        "rag_loaded": vector_db.is_loaded,
+        "rag_documents": vector_db.total_documents,
+        "llm_primary": GROQ_MODEL,
+        "llm_fallback": OLLAMA_MODEL,
     }
-    ```
-    
-    **Example Request:**
-    ```bash
-    curl -X POST "http://localhost:8000/api/login" \
-         -H "Content-Type: application/json" \
-         -d '{"doctor_id": 1}'
-    ```
-    
-    **Success Response (200):**
-    ```json
-    {
-        "success": true,
-        "message": "Login successful",
-        "doctor_id": 1,
-        "doctor_name": "Dr. Robert Jones",
-        "specialization": "Pulmonology"
-    }
-    ```
-    
-    **Error Response (401):**
-    ```json
-    {
-        "detail": "Doctor not found or not available"
-    }
-    ```
-    """
-    logger.info(f"Login attempt for doctor_id: {request.doctor_id}")
-    
-    query = """
-    SELECT doctor_id, first_name, last_name, specialization 
-    FROM Doctor 
-    WHERE doctor_id = %s AND is_available = 1
-    """
-    
-    result = execute_query(query, (request.doctor_id,))
-    
-    if result["success"] and result["count"] > 0:
-        doctor = result["data"][0]
-        doctor_name = f"Dr. {doctor['first_name']} {doctor['last_name']}"
-        logger.info(f"Login successful for doctor: {doctor_name}")
-        return LoginResponse(
-            success=True,
-            message="Login successful",
-            doctor_id=doctor["doctor_id"],
-            doctor_name=doctor_name,
-            specialization=doctor.get("specialization")
-        )
-    else:
-        logger.warning(f"Login failed for doctor_id: {request.doctor_id} - Doctor not found or not available")
-        raise HTTPException(status_code=401, detail="Doctor not found or not available")
 
 
-# -----------------------------------------------------------------------------
-# PATIENT MANAGEMENT
-# -----------------------------------------------------------------------------
-
-@app.post("/api/patients/list", response_model=PatientListResponse)
-async def list_patients(request: PatientListRequest):
-    """
-    List all patients with pagination (no filters).
-    
-    **Request Format:** JSON
-    
-    **Content-Type:** application/json
-    
-    **Request Body:**
-    ```json
-    {
-        "limit": 100,   // Optional: Integer - Max results (default: 100)
-        "offset": 0     // Optional: Integer - Pagination offset (default: 0)
-    }
-    ```
-    
-    **Example Request:**
-    ```bash
-    curl -X POST "http://localhost:8000/api/patients/list" \
-         -H "Content-Type: application/json" \
-         -d '{"limit": 10, "offset": 0}'
-    ```
-    
-    **Success Response (200):**
-    ```json
-    {
-        "success": true,
-        "patients": [
-            {
-                "patient_id": 1,
-                "name": "Barbara Rodriguez",
-                "dob": "1985-03-15",
-                "sex": "Female",
-                "age": 40,
-                "created_at": "2026-01-15T10:30:00",
-                "updated_at": "2026-01-15T10:30:00"
-            }
-        ],
-        "total_count": 1
-    }
-    ```
-    """
-    logger.info(f"Listing all patients with pagination: limit={request.limit}, offset={request.offset}")
-    
-    # Get total count
-    count_query = "SELECT COUNT(*) as total FROM Patient"
-    count_result = execute_query(count_query)
-    total_count = count_result["data"][0]["total"] if count_result["success"] else 0
-    
-    # Get patients with pagination
-    query = """
-    SELECT p.patient_id, p.name, p.dob, p.sex, p.created_at, p.updated_at,
-           TIMESTAMPDIFF(YEAR, p.dob, CURDATE()) as age
-    FROM Patient p
-    ORDER BY p.patient_id
-    LIMIT %s OFFSET %s
-    """
-    
-    result = execute_query(query, (request.limit, request.offset))
-    
-    if result["success"]:
-        logger.info(f"Found {result['count']} patients (total: {total_count})")
-        return PatientListResponse(
-            success=True,
-            patients=result["data"],
-            total_count=total_count
-        )
-    else:
-        logger.error("Failed to list patients")
-        raise HTTPException(status_code=500, detail="Failed to retrieve patients")
-
-
-@app.post("/api/patients/filter", response_model=PatientListResponse)
-async def filter_patients(request: PatientFilterRequest):
-    """
-    Filter patients with various criteria.
-    
-    **Request Format:** JSON
-    
-    **Content-Type:** application/json
-    
-    **Request Body:**
-    ```json
-    {
-        "doctor_id": 1,           // Optional: Integer - Filter by assigned doctor
-        "name_filter": "John",    // Optional: String - Partial name match (case-insensitive)
-        "sex": "Male",            // Optional: String - "Male", "Female", or "Other"
-        "min_age": 18,            // Optional: Integer - Minimum age
-        "max_age": 65,            // Optional: Integer - Maximum age
-        "limit": 100,             // Optional: Integer - Max results (default: 100)
-        "offset": 0               // Optional: Integer - Pagination offset (default: 0)
-    }
-    ```
-    
-    **Example Requests:**
-    
-    Filter by name:
-    ```bash
-    curl -X POST "http://localhost:8000/api/patients/filter" \
-         -H "Content-Type: application/json" \
-         -d '{"name_filter": "Barbara"}'
-    ```
-    
-    Filter by sex and age range:
-    ```bash
-    curl -X POST "http://localhost:8000/api/patients/filter" \
-         -H "Content-Type: application/json" \
-         -d '{"sex": "Female", "min_age": 30, "max_age": 50}'
-    ```
-    
-    Filter by doctor:
-    ```bash
-    curl -X POST "http://localhost:8000/api/patients/filter" \
-         -H "Content-Type: application/json" \
-         -d '{"doctor_id": 1}'
-    ```
-    
-    **Success Response (200):**
-    ```json
-    {
-        "success": true,
-        "patients": [
-            {
-                "patient_id": 1,
-                "name": "Barbara Rodriguez",
-                "dob": "1985-03-15",
-                "sex": "Female",
-                "age": 40,
-                "created_at": "2026-01-15T10:30:00",
-                "updated_at": "2026-01-15T10:30:00"
-            }
-        ],
-        "total_count": 1
-    }
-    ```
-    """
-    logger.info(f"Filtering patients with: {request.dict()}")
-    
-    # Build dynamic query based on filters
-    conditions = []
-    params = []
-    
-    base_query = """
-    SELECT p.patient_id, p.name, p.dob, p.sex, p.created_at, p.updated_at,
-           TIMESTAMPDIFF(YEAR, p.dob, CURDATE()) as age
-    FROM Patient p
-    """
-    
-    # Add join for doctor filter
-    if request.doctor_id:
-        base_query += " LEFT JOIN Patient_Doctor pd ON p.patient_id = pd.patient_id"
-        conditions.append("pd.doctor_id = %s")
-        params.append(request.doctor_id)
-    
-    if request.name_filter:
-        conditions.append("p.name LIKE %s")
-        params.append(f"%{request.name_filter}%")
-    
-    if request.sex:
-        conditions.append("p.sex = %s")
-        params.append(request.sex)
-    
-    if request.min_age is not None:
-        conditions.append("TIMESTAMPDIFF(YEAR, p.dob, CURDATE()) >= %s")
-        params.append(request.min_age)
-    
-    if request.max_age is not None:
-        conditions.append("TIMESTAMPDIFF(YEAR, p.dob, CURDATE()) <= %s")
-        params.append(request.max_age)
-    
-    # Build WHERE clause
-    if conditions:
-        base_query += " WHERE " + " AND ".join(conditions)
-    
-    # Get total count first
-    count_query = f"SELECT COUNT(*) as total FROM ({base_query}) as subquery"
-    count_result = execute_query(count_query, tuple(params) if params else None)
-    total_count = count_result["data"][0]["total"] if count_result["success"] else 0
-    
-    # Add pagination
-    base_query += " ORDER BY p.patient_id LIMIT %s OFFSET %s"
-    params.extend([request.limit, request.offset])
-    
-    result = execute_query(base_query, tuple(params))
-    
-    if result["success"]:
-        logger.info(f"Found {result['count']} patients matching filters (total: {total_count})")
-        return PatientListResponse(
-            success=True,
-            patients=result["data"],
-            total_count=total_count
-        )
-    else:
-        logger.error("Failed to filter patients")
-        raise HTTPException(status_code=500, detail="Failed to filter patients")
-
-
-@app.post("/api/patients/get", response_model=PatientGetResponse)
-async def get_patient(request: PatientGetRequest):
-    """
-    Get detailed information for a single patient including medical history,
-    appointments, medications, and documents.
-    
-    **Request Format:** JSON
-    
-    **Content-Type:** application/json
-    
-    **Request Body:**
-    ```json
-    {
-        "patient_id": 1  // Required: Integer - The patient's ID
-    }
-    ```
-    
-    **Example Request:**
-    ```bash
-    curl -X POST "http://localhost:8000/api/patients/get" \
-         -H "Content-Type: application/json" \
-         -d '{"patient_id": 1}'
-    ```
-    
-    **Success Response (200):**
-    ```json
-    {
-        "success": true,
-        "patient": {
-            "patient_id": 1,
-            "name": "Barbara Rodriguez",
-            "dob": "1985-03-15",
-            "sex": "Female",
-            "age": 40,
-            "doctors": [{"doctor_id": 1, "first_name": "Robert", "last_name": "Jones"}],
-            "medical_history": [...],
-            "recent_appointments": [...],
-            "medications": [...],
-            "documents": [...]
-        },
-        "message": "Patient found"
-    }
-    ```
-    
-    **Not Found Response (200 with success=false):**
-    ```json
-    {
-        "success": false,
-        "patient": null,
-        "message": "Patient not found"
-    }
-    ```
-    """
-    logger.info(f"Getting patient details for patient_id: {request.patient_id}")
-    
-    # Get basic patient info
-    patient_query = """
-    SELECT p.patient_id, p.name, p.dob, p.sex, p.created_at, p.updated_at,
-           TIMESTAMPDIFF(YEAR, p.dob, CURDATE()) as age
-    FROM Patient p
-    WHERE p.patient_id = %s
-    """
-    
-    result = execute_query(patient_query, (request.patient_id,))
-    
-    if not result["success"] or result["count"] == 0:
-        logger.warning(f"Patient not found: {request.patient_id}")
-        return PatientGetResponse(
-            success=False,
-            patient=None,
-            message="Patient not found"
-        )
-    
-    patient = result["data"][0]
-    
-    # Get assigned doctors
-    doctors_query = """
-    SELECT d.doctor_id, d.first_name, d.last_name, d.specialization, pd.is_primary_doctor
-    FROM Doctor d
-    JOIN Patient_Doctor pd ON d.doctor_id = pd.doctor_id
-    WHERE pd.patient_id = %s
-    """
-    doctors_result = execute_query(doctors_query, (request.patient_id,))
-    patient["doctors"] = doctors_result["data"] if doctors_result["success"] else []
-    
-    # Get medical history
-    history_query = """
-    SELECT history_id, history_type, history_item, history_details, history_date, severity, is_active
-    FROM Medical_History
-    WHERE patient_id = %s
-    ORDER BY history_date DESC
-    """
-    history_result = execute_query(history_query, (request.patient_id,))
-    patient["medical_history"] = history_result["data"] if history_result["success"] else []
-    
-    # Get appointments
-    appointments_query = """
-    SELECT appointment_id, appointment_date, appointment_time, status, appointment_type, doctor_name, notes
-    FROM Appointment
-    WHERE patient_id = %s
-    ORDER BY appointment_date DESC
-    LIMIT 10
-    """
-    appointments_result = execute_query(appointments_query, (request.patient_id,))
-    patient["recent_appointments"] = appointments_result["data"] if appointments_result["success"] else []
-    
-    # Get medications
-    medications_query = """
-    SELECT medication_id, medicine_name, dosage, frequency, prescribed_date, is_continued
-    FROM Medication
-    WHERE patient_id = %s
-    ORDER BY prescribed_date DESC
-    """
-    medications_result = execute_query(medications_query, (request.patient_id,))
-    patient["medications"] = medications_result["data"] if medications_result["success"] else []
-    
-    # Get documents
-    documents_query = """
-    SELECT document_id, document_type, document_name, upload_date, ocr_status, is_verified
-    FROM Patient_Documents
-    WHERE patient_id = %s
-    ORDER BY upload_date DESC
-    """
-    documents_result = execute_query(documents_query, (request.patient_id,))
-    patient["documents"] = documents_result["data"] if documents_result["success"] else []
-    
-    logger.info(f"Successfully retrieved patient details for: {patient['name']}")
-    return PatientGetResponse(
-        success=True,
-        patient=patient,
-        message="Patient found"
-    )
-
-
-@app.post("/api/patients/create", response_model=PatientCreateResponse)
-async def create_patient(request: PatientCreateRequest):
-    """
-    Create a new patient record.
-    
-    **Request Format:** JSON
-    
-    **Content-Type:** application/json
-    
-    **Request Body:**
-    ```json
-    {
-        "name": "John Doe",       // Required: String - Full name of the patient
-        "dob": "1990-05-15",      // Optional: String - Date of birth (YYYY-MM-DD format)
-        "sex": "Male",            // Optional: String - "Male", "Female", or "Other"
-        "doctor_id": 1            // Optional: Integer - Assign a primary doctor
-    }
-    ```
-    
-    **Example Request:**
-    ```bash
-    curl -X POST "http://localhost:8000/api/patients/create" \
-         -H "Content-Type: application/json" \
-         -d '{"name": "John Doe", "dob": "1990-05-15", "sex": "Male", "doctor_id": 1}'
-    ```
-    
-    **Success Response (200):**
-    ```json
-    {
-        "success": true,
-        "message": "Patient created successfully",
-        "patient_id": 3
-    }
-    ```
-    
-    **Error Response (400 - Invalid sex value):**
-    ```json
-    {
-        "detail": "Sex must be 'Male', 'Female', or 'Other'"
-    }
-    ```
-    """
-    logger.info(f"Creating new patient: {request.name}")
-    
-    # Validate sex if provided
-    if request.sex and request.sex not in ['Male', 'Female', 'Other']:
-        logger.warning(f"Invalid sex value: {request.sex}")
-        raise HTTPException(status_code=400, detail="Sex must be 'Male', 'Female', or 'Other'")
-    
-    # Build insert query
-    columns = ["name"]
-    values = [request.name]
-    placeholders = ["%s"]
-    
-    if request.dob:
-        columns.append("dob")
-        values.append(request.dob)
-        placeholders.append("%s")
-    
-    if request.sex:
-        columns.append("sex")
-        values.append(request.sex)
-        placeholders.append("%s")
-    
-    insert_query = f"""
-    INSERT INTO Patient ({', '.join(columns)})
-    VALUES ({', '.join(placeholders)})
-    """
-    
-    result = execute_query(insert_query, tuple(values), fetch=False)
-    
-    if result["success"] and result["lastrowid"]:
-        patient_id = result["lastrowid"]
-        logger.info(f"Created patient with ID: {patient_id}")
-        
-        # If doctor_id provided, create Patient_Doctor relationship
-        if request.doctor_id:
-            assign_query = """
-            INSERT INTO Patient_Doctor (patient_id, doctor_id, is_primary_doctor)
-            VALUES (%s, %s, 1)
-            """
-            try:
-                execute_query(assign_query, (patient_id, request.doctor_id), fetch=False)
-                logger.info(f"Assigned doctor {request.doctor_id} to patient {patient_id}")
-            except Exception as e:
-                logger.warning(f"Failed to assign doctor: {e}")
-        
-        return PatientCreateResponse(
-            success=True,
-            message="Patient created successfully",
-            patient_id=patient_id
-        )
-    else:
-        logger.error("Failed to create patient")
-        raise HTTPException(status_code=500, detail="Failed to create patient")
-
-
-# -----------------------------------------------------------------------------
-# DOCUMENT MANAGEMENT
-# -----------------------------------------------------------------------------
-
-@app.post("/api/documents/list", response_model=DocumentListResponse)
-async def list_patient_documents(request: DocumentListRequest):
-    """
-    Get all documents for a specific patient.
-    
-    **Request Format:** JSON
-    
-    **Content-Type:** application/json
-    
-    **Request Body:**
-    ```json
-    {
-        "patient_id": 1,              // Required: Integer - The patient's ID
-        "document_type": "Lab Report", // Optional: String - Filter by document type
-        "limit": 100,                  // Optional: Integer - Max results (default: 100)
-        "offset": 0                    // Optional: Integer - Pagination offset (default: 0)
-    }
-    ```
-    
-    **Example Requests:**
-    
-    Get all documents for a patient:
-    ```bash
-    curl -X POST "http://localhost:8000/api/documents/list" \
-         -H "Content-Type: application/json" \
-         -d '{"patient_id": 1}'
-    ```
-    
-    Get only Lab Reports:
-    ```bash
-    curl -X POST "http://localhost:8000/api/documents/list" \
-         -H "Content-Type: application/json" \
-         -d '{"patient_id": 1, "document_type": "Lab Report"}'
-    ```
-    
-    **Success Response (200):**
-    ```json
-    {
-        "success": true,
-        "documents": [
-            {
-                "document_id": 1,
-                "document_type": "Lab Report",
-                "document_name": "blood_test.pdf",
-                "upload_date": "2026-02-10T14:30:00",
-                "ocr_status": "completed",
-                "ocr_text": "Patient Name: John Doe...",
-                "is_verified": 1,
-                "notes": "Annual checkup results"
-            }
-        ],
-        "total_count": 1,
-        "patient_id": 1
-    }
-    ```
-    """
-    logger.info(f"Listing documents for patient_id: {request.patient_id}")
-    
-    # Verify patient exists
-    check_query = "SELECT patient_id, name FROM Patient WHERE patient_id = %s"
-    check_result = execute_query(check_query, (request.patient_id,))
-    if not check_result["success"] or check_result["count"] == 0:
-        logger.warning(f"Patient not found: {request.patient_id}")
-        raise HTTPException(status_code=404, detail="Patient not found")
-    
-    # Build query with optional document_type filter
-    conditions = ["patient_id = %s"]
-    params = [request.patient_id]
-    
-    if request.document_type:
-        conditions.append("document_type = %s")
-        params.append(request.document_type)
-    
-    where_clause = " AND ".join(conditions)
-    
-    # Get total count
-    count_query = f"SELECT COUNT(*) as total FROM Patient_Documents WHERE {where_clause}"
-    count_result = execute_query(count_query, tuple(params))
-    total_count = count_result["data"][0]["total"] if count_result["success"] else 0
-    
-    # Get documents with pagination
-    query = f"""
-    SELECT document_id, patient_id, doctor_id, document_type, document_name, 
-           file_path, file_size_bytes, mime_type, ocr_text, ocr_status, 
-           ocr_processed_at, upload_date, notes, is_verified, verified_by, 
-           verified_at, created_at, updated_at
-    FROM Patient_Documents
-    WHERE {where_clause}
-    ORDER BY upload_date DESC
-    LIMIT %s OFFSET %s
-    """
-    params.extend([request.limit, request.offset])
-    
-    result = execute_query(query, tuple(params))
-    
-    if result["success"]:
-        logger.info(f"Found {result['count']} documents for patient {request.patient_id} (total: {total_count})")
-        return DocumentListResponse(
-            success=True,
-            documents=result["data"],
-            total_count=total_count,
-            patient_id=request.patient_id
-        )
-    else:
-        logger.error("Failed to list documents")
-        raise HTTPException(status_code=500, detail="Failed to retrieve documents")
-
-
-@app.post("/api/documents/get", response_model=DocumentGetResponse)
-async def get_document(request: DocumentGetRequest):
-    """
-    Get a specific document by document_id.
-    
-    **Request Format:** JSON
-    
-    **Content-Type:** application/json
-    
-    **Request Body:**
-    ```json
-    {
-        "document_id": 1  // Required: Integer - The document's ID
-    }
-    ```
-    
-    **Example Request:**
-    ```bash
-    curl -X POST "http://localhost:8000/api/documents/get" \
-         -H "Content-Type: application/json" \
-         -d '{"document_id": 1}'
-    ```
-    
-    **Success Response (200):**
-    ```json
-    {
-        "success": true,
-        "document": {
-            "document_id": 1,
-            "patient_id": 1,
-            "patient_name": "John Doe",
-            "doctor_id": 1,
-            "document_type": "Lab Report",
-            "document_name": "blood_test.pdf",
-            "ocr_text": "Full OCR extracted text...",
-            "ocr_status": "completed",
-            "upload_date": "2026-02-10T14:30:00",
-            "is_verified": 1,
-            "notes": "Annual checkup results"
-        },
-        "message": "Document found"
-    }
-    ```
-    
-    **Not Found Response (200 with success=false):**
-    ```json
-    {
-        "success": false,
-        "document": null,
-        "message": "Document not found"
-    }
-    ```
-    """
-    logger.info(f"Getting document details for document_id: {request.document_id}")
-    
-    query = """
-    SELECT d.document_id, d.patient_id, p.name as patient_name, d.doctor_id, 
-           d.document_type, d.document_name, d.file_path, d.file_size_bytes, 
-           d.mime_type, d.ocr_text, d.ocr_status, d.ocr_processed_at, 
-           d.upload_date, d.notes, d.is_verified, d.verified_by, d.verified_at,
-           d.created_at, d.updated_at
-    FROM Patient_Documents d
-    JOIN Patient p ON d.patient_id = p.patient_id
-    WHERE d.document_id = %s
-    """
-    
-    result = execute_query(query, (request.document_id,))
-    
-    if result["success"] and result["count"] > 0:
-        logger.info(f"Found document: {result['data'][0]['document_name']}")
-        return DocumentGetResponse(
-            success=True,
-            document=result["data"][0],
-            message="Document found"
-        )
-    else:
-        logger.warning(f"Document not found: {request.document_id}")
-        return DocumentGetResponse(
-            success=False,
-            document=None,
-            message="Document not found"
-        )
-
-
-# -----------------------------------------------------------------------------
-# DOCUMENT UPLOAD
-# -----------------------------------------------------------------------------
-
-@app.post("/api/patients/uploads", response_model=DocumentUploadResponse)
-async def upload_document(
-    patient_id: int = Form(..., description="Patient ID"),
-    doctor_id: Optional[int] = Form(None, description="Doctor ID who uploads"),
-    document_type: str = Form(..., description="Type of document (e.g., Lab Report, Prescription)"),
-    notes: Optional[str] = Form(None, description="Additional notes"),
-    file: UploadFile = File(..., description="Clinical document file")
-):
-    """
-    Upload a clinical document for a patient.
-    Performs OCR (placeholder - returns 'Done' for now).
-    
-    **Request Format:** multipart/form-data
-    
-    **Content-Type:** multipart/form-data
-    
-    **Form Fields:**
-    - `patient_id` (Required): Integer - The patient's ID
-    - `doctor_id` (Optional): Integer - The uploading doctor's ID
-    - `document_type` (Required): String - Type of document
-      - Examples: "Lab Report", "Prescription", "Imaging", "Clinical Notes", "Discharge Summary"
-    - `notes` (Optional): String - Additional notes about the document
-    - `file` (Required): File - The clinical document file (PDF, image, etc.)
-    
-    **Example Request (curl):**
-    ```bash
-    curl -X POST "http://localhost:8000/api/patients/uploads" \
-         -F "patient_id=1" \
-         -F "doctor_id=1" \
-         -F "document_type=Lab Report" \
-         -F "notes=Blood test results from 2026-02-10" \
-         -F "file=@/path/to/document.pdf"
-    ```
-    
-    **Example Request (JavaScript/Fetch):**
-    ```javascript
-    const formData = new FormData();
-    formData.append('patient_id', '1');
-    formData.append('doctor_id', '1');
-    formData.append('document_type', 'Lab Report');
-    formData.append('notes', 'Blood test results');
-    formData.append('file', fileInput.files[0]);
-    
-    fetch('http://localhost:8000/api/patients/uploads', {
-        method: 'POST',
-        body: formData
-    });
-    ```
-    
-    **Success Response (200):**
-    ```json
-    {
-        "success": true,
-        "message": "Document uploaded and processed successfully",
-        "document_id": 1,
-        "ocr_result": "Done"
-    }
-    ```
-    
-    **Error Response (404 - Patient not found):**
-    ```json
-    {
-        "detail": "Patient not found"
-    }
-    ```
-    """
-    logger.info(f"Document upload for patient_id: {patient_id}, file: {file.filename}")
-    logger.debug(f"Document type: {document_type}, doctor_id: {doctor_id}")
-    
-    # Verify patient exists
-    check_query = "SELECT patient_id FROM Patient WHERE patient_id = %s"
-    check_result = execute_query(check_query, (patient_id,))
-    if not check_result["success"] or check_result["count"] == 0:
-        logger.warning(f"Patient not found: {patient_id}")
-        raise HTTPException(status_code=404, detail="Patient not found")
-    
-    # Read file content
-    try:
-        file_content = await file.read()
-        file_size = len(file_content)
-        logger.debug(f"File read successfully, size: {file_size} bytes, content_type: {file.content_type}")
-    except Exception as e:
-        logger.error(f"Failed to read uploaded file: {e}")
-        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
-    
-    # Perform OCR (placeholder)
-    ocr_result = perform_ocr(file_content, file.filename)
-    logger.info(f"OCR result: {ocr_result}")
-    
-    # Store document record in database
-    insert_query = """
-    INSERT INTO Patient_Documents 
-    (patient_id, doctor_id, document_type, document_name, file_size_bytes, mime_type, 
-     ocr_text, ocr_status, ocr_processed_at, notes)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, 'completed', NOW(), %s)
-    """
-    
-    params = (
-        patient_id,
-        doctor_id,
-        document_type,
-        file.filename,
-        file_size,
-        file.content_type,
-        ocr_result,
-        notes
-    )
-    
-    result = execute_query(insert_query, params, fetch=False)
-    
-    if result["success"] and result["lastrowid"]:
-        document_id = result["lastrowid"]
-        logger.info(f"Document stored with ID: {document_id}")
-        return DocumentUploadResponse(
-            success=True,
-            message="Document uploaded and processed successfully",
-            document_id=document_id,
-            ocr_result=ocr_result
-        )
-    else:
-        logger.error("Failed to store document record")
-        raise HTTPException(status_code=500, detail="Failed to store document")
-
-
-# =============================================================================
-# MAIN ENTRY POINT
-# =============================================================================
-
-def get_local_ip():
-    """Get the local network IP address."""
+# ============================================================================
+# MAIN
+# ============================================================================
+if __name__ == "__main__":
     import socket
     try:
-        # Create a socket to determine the local IP
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
+        local_ip = s.getsockname()[0]
         s.close()
-        return ip
     except Exception:
-        return "127.0.0.1"
+        local_ip = "127.0.0.1"
 
-
-if __name__ == "__main__":
-    import uvicorn
-    
-    local_ip = get_local_ip()
-    
-    logger.info("=" * 70)
-    logger.info("Starting Patient API Server")
-    logger.info("=" * 70)
-    logger.info(f"Local:   http://localhost:8000")
-    logger.info(f"Network: http://{local_ip}:8000")
-    logger.info("=" * 70)
-    logger.info("API Documentation:")
-    logger.info(f"  - http://localhost:8000/docs")
-    logger.info(f"  - http://{local_ip}:8000/docs")
-    logger.info("=" * 70)
-    
-    print("\n" + "=" * 70)
-    print("🚀 Patient API Server Starting")
-    print("=" * 70)
+    print("=" * 60)
+    print("  Kju Backend API Server")
     print(f"  Local:   http://localhost:8000")
     print(f"  Network: http://{local_ip}:8000")
-    print("=" * 70)
-    print(f"  API Docs: http://{local_ip}:8000/docs")
-    print("=" * 70 + "\n")
-    
-    uvicorn.run(
-        "patient_api:app",
-        host="0.0.0.0",  # Accessible from network
-        port=8000,
-        reload=True,
-        log_level="debug",  # Verbose logging
-        access_log=True
-    )
+    print(f"  Docs:    http://{local_ip}:8000/docs")
+    print("=" * 60)
+    uvicorn.run("patient_api:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
