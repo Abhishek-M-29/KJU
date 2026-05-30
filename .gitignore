@@ -112,6 +112,7 @@ MANIFEST
 # Backup files
 *.bak
 *.backup
+backup/
 ChangedFiles/
 
 # Temporary files
