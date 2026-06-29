@@ -96,5 +96,25 @@ async def health_check():
         "service_status": "active" if rag_service else "inactive"
     }
 
+import socket
+
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # This doesn't need to be reachable; it just triggers the OS 
+        # to select the correct interface for outgoing traffic.
+        s.connect(('8.8.8.8', 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
 if __name__ == "__main__":
+    local_ip = get_local_ip()
+    print(f"\n--- Server starting on network IP: {local_ip} ---")
+    
+    import uvicorn
+    # Now you can use the variable or keep '0.0.0.0' to listen on all interfaces
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
